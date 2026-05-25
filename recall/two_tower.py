@@ -338,6 +338,84 @@ def build_model_from_checkpoint(checkpoint, device):
     return model
 
 
+class TwoTowerRecaller:
+    def __init__(self, model_path=MODEL_PATH):
+        self.device = get_device()
+        self.checkpoint = torch.load(model_path, map_location=self.device)
+        self.feature_info = self.checkpoint["feature_info"]
+        self.model = build_model_from_checkpoint(self.checkpoint, self.device)
+
+    def recommend(self, user_id, top_k=10, include_title=True):
+        user_id_to_index = self.feature_info["user_id_to_index"]
+        index_to_movie_id = self.feature_info["index_to_movie_id"]
+        user_features = self.feature_info["user_features"]
+        movie_features = self.feature_info["movie_features"]
+
+        if user_id not in user_id_to_index:
+            print("这个用户没有出现在训练集中，暂时无法用双塔召回")
+            return []
+
+        user_index = user_id_to_index[user_id]
+        user_feature = user_features[user_id]
+        movie_count = len(index_to_movie_id)
+
+        with torch.no_grad():
+            user_tensor = torch.tensor(
+                [user_index] * movie_count, dtype=torch.long, device=self.device
+            )
+            gender_tensor = torch.tensor(
+                [user_feature["gender_index"]] * movie_count,
+                dtype=torch.long,
+                device=self.device,
+            )
+            age_tensor = torch.tensor(
+                [user_feature["age_index"]] * movie_count,
+                dtype=torch.long,
+                device=self.device,
+            )
+            occupation_tensor = torch.tensor(
+                [user_feature["occupation_index"]] * movie_count,
+                dtype=torch.long,
+                device=self.device,
+            )
+            movie_tensor = torch.arange(movie_count, dtype=torch.long, device=self.device)
+
+            genre_vectors = []
+            for movie_index in range(movie_count):
+                movie_id = index_to_movie_id[movie_index]
+                genre_vectors.append(movie_features[movie_id]["genre_vector"])
+            genre_tensor = torch.tensor(
+                genre_vectors, dtype=torch.float, device=self.device
+            )
+
+            scores = self.model(
+                user_tensor,
+                gender_tensor,
+                age_tensor,
+                occupation_tensor,
+                movie_tensor,
+                genre_tensor,
+            )
+            top_scores, top_movie_indexes = torch.topk(scores, top_k)
+            top_scores = top_scores.cpu()
+            top_movie_indexes = top_movie_indexes.cpu()
+
+        recommendations = []
+        for score, movie_index in zip(top_scores, top_movie_indexes):
+            movie_id = index_to_movie_id[int(movie_index)]
+            recommendations.append(
+                {
+                    "movie_id": movie_id,
+                    "score": float(score),
+                }
+            )
+
+        if include_title:
+            recommendations = add_movie_titles(recommendations)
+
+        return recommendations
+
+
 def recommend_for_user(user_id, top_k=10):
     device = get_device()
     checkpoint = torch.load(MODEL_PATH, map_location=device)
