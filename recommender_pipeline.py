@@ -2,7 +2,7 @@ class RecommenderPipeline:
     def __init__(self):
         # 这里先加载粗排模型，避免每次请求都重复加载权重
         self.rough_ranker = build_rough_ranker()
-        self.fine_rank_model = None
+        self.fine_ranker = build_fine_ranker()
         self.rerank_model = None
 
     def recall(self, user_id, recall_size=300):
@@ -20,8 +20,12 @@ class RecommenderPipeline:
         return rough_ranked_items
 
     def fine_rank(self, user_id, candidates, fine_rank_size=50):
-        # 精排阶段：暂时用占位逻辑
-        fine_ranked_items = fake_fine_rank(user_id, candidates, fine_rank_size)
+        # 精排阶段：MMoE epoch 6 模型打分，保留前 50 部
+        fine_ranked_items = self.fine_ranker.rank(
+            user_id=user_id,
+            candidates=candidates,
+            top_k=fine_rank_size,
+        )
         return fine_ranked_items
 
     def rerank(self, user_id, ranked_items, top_k=20):
@@ -65,6 +69,13 @@ def build_rough_ranker():
     from rough_rank.rough_rank_inference import RoughRanker
 
     return RoughRanker()
+
+
+def build_fine_ranker():
+    # 延迟导入，避免没有 torch 的环境在导入 pipeline 时直接报错
+    from fine_rank.mmoe_inference import MMoEFineRanker
+
+    return MMoEFineRanker()
 
 
 def two_tower_recall(user_id, recall_size):
