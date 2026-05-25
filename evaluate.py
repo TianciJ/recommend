@@ -267,14 +267,14 @@ def get_score(results, metric, k):
 
 def main():
     parser = argparse.ArgumentParser(description="评估所有双塔召回模型")
-    parser.add_argument("--ks", default="10,20", help="例如：10,20,50")
+    parser.add_argument("--ks", default="10,20,100,300", help="例如：10,20,100,300")
     parser.add_argument("--max-users", type=int, default=None)
     parser.add_argument(
         "--select-metric",
         choices=["precision", "recall", "hit_rate"],
         default="recall",
     )
-    parser.add_argument("--select-k", type=int, default=20)
+    parser.add_argument("--select-k", type=int, default=300)
     args = parser.parse_args()
 
     k_list = parse_k_list(args.ks)

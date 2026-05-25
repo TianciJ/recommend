@@ -34,7 +34,7 @@ class RecommenderPipeline:
         self,
         user_id,
         top_k=20,
-        recall_size=100,
+        recall_size=300,
         rough_rank_size=100,
         fine_rank_size=50,
     ):
@@ -123,7 +123,7 @@ def fake_rerank(user_id, ranked_items, top_k):
 
 def main():
     pipeline = RecommenderPipeline()
-    recommendations = pipeline.recommend(user_id=1, top_k=10, recall_size=100)
+    recommendations = pipeline.recommend(user_id=1, top_k=10, recall_size=300)
 
     for rank, item in enumerate(recommendations, start=1):
         print(
