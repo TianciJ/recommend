@@ -1,7 +1,7 @@
 from pathlib import Path
 
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parent.parent
 MOVIES_PATH = BASE_DIR / "train_data" / "movies.dat"
 
 

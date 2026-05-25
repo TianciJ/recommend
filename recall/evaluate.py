@@ -4,11 +4,15 @@ from pathlib import Path
 
 import torch
 
-from two_tower import build_model_from_checkpoint
-from two_tower import get_device
+try:
+    from .two_tower import build_model_from_checkpoint
+    from .two_tower import get_device
+except ImportError:
+    from two_tower import build_model_from_checkpoint
+    from two_tower import get_device
 
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parent.parent
 TRAIN_RATINGS_PATH = BASE_DIR / "train_data" / "ratings.dat"
 TEST_RATINGS_PATH = BASE_DIR / "test_data" / "ratings.dat"
 MODEL_DIR = BASE_DIR / "model_weights"
