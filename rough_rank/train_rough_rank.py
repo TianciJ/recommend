@@ -6,17 +6,22 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset
 
-from rough_rank_three_tower import ThreeTowerRoughRankModel
+try:
+    from .rough_rank_three_tower import ThreeTowerRoughRankModel
+except ImportError:
+    from rough_rank_three_tower import ThreeTowerRoughRankModel
 
 
-BASE_DIR = Path(__file__).resolve().parent
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+ROUGH_RANK_MODEL_DIR = BASE_DIR / "rough_rank_model"
 TRAIN_DIR = BASE_DIR / "train_data"
 TEST_DIR = BASE_DIR / "test_data"
 TRAIN_RATINGS_PATH = TRAIN_DIR / "ratings.dat"
 TEST_RATINGS_PATH = TEST_DIR / "ratings.dat"
 USERS_PATH = TRAIN_DIR / "users.dat"
 MOVIES_PATH = TRAIN_DIR / "movies.dat"
-MODEL_DIR = BASE_DIR / "rough_rank"
+MODEL_DIR = ROUGH_RANK_MODEL_DIR
 MODEL_PATH = MODEL_DIR / "rough_rank_three_tower.pt"
 
 DENSE_FEATURE_DIM = 4

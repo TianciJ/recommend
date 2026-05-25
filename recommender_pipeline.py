@@ -1,18 +1,22 @@
 class RecommenderPipeline:
     def __init__(self):
-        # 后面可以在这里加载粗排、精排、重排模型
-        self.rough_rank_model = None
+        # 这里先加载粗排模型，避免每次请求都重复加载权重
+        self.rough_ranker = build_rough_ranker()
         self.fine_rank_model = None
         self.rerank_model = None
 
     def recall(self, user_id, recall_size=300):
-        # 双塔模型
+        # 召回阶段：双塔召回 300 部候选电影
         candidates = two_tower_recall(user_id, recall_size)
         return candidates
 
     def rough_rank(self, user_id, candidates, rough_rank_size=100):
-        # 粗排阶段：暂时用占位逻辑
-        rough_ranked_items = fake_rough_rank(user_id, candidates, rough_rank_size)
+        # 粗排阶段：三塔粗排模型打分，保留前 100 部
+        rough_ranked_items = self.rough_ranker.rank(
+            user_id=user_id,
+            recalled_items=candidates,
+            top_k=rough_rank_size,
+        )
         return rough_ranked_items
 
     def fine_rank(self, user_id, candidates, fine_rank_size=50):
@@ -33,24 +37,20 @@ class RecommenderPipeline:
         rough_rank_size=100,
         fine_rank_size=50,
     ):
-        # 1. 召回：从全量电影中取出候选集
         recalled_items = self.recall(user_id, recall_size)
 
-        # 2. 粗排：从召回候选里保留一部分
         rough_ranked_items = self.rough_rank(
             user_id=user_id,
             candidates=recalled_items,
             rough_rank_size=rough_rank_size,
         )
 
-        # 3. 精排：对粗排结果做更细的排序
         fine_ranked_items = self.fine_rank(
             user_id=user_id,
             candidates=rough_ranked_items,
             fine_rank_size=fine_rank_size,
         )
 
-        # 4. 重排：做最终过滤、打散、多样性控制
         final_items = self.rerank(
             user_id=user_id,
             ranked_items=fine_ranked_items,
@@ -60,7 +60,15 @@ class RecommenderPipeline:
         return final_items
 
 
+def build_rough_ranker():
+    # 延迟导入，避免没有 torch 的环境在导入 pipeline 时直接报错
+    from rough_rank.rough_rank_inference import RoughRanker
+
+    return RoughRanker()
+
+
 def two_tower_recall(user_id, recall_size):
+    # 延迟导入，避免没有 torch 的环境在导入 pipeline 时直接报错
     from recall.two_tower import recommend_for_user
 
     recalled_movies = recommend_for_user(user_id=user_id, top_k=recall_size)
@@ -78,23 +86,6 @@ def two_tower_recall(user_id, recall_size):
         )
 
     return candidates
-
-
-def fake_rough_rank(user_id, candidates, rough_rank_size):
-    # 临时占位：目前直接沿用召回分数做粗排分
-    ranked_items = []
-
-    for item in candidates:
-        rough_score = item["recall_score"]
-        ranked_items.append(
-            {
-                **item,
-                "rough_rank_score": rough_score,
-            }
-        )
-
-    ranked_items.sort(key=lambda item: item["rough_rank_score"], reverse=True)
-    return ranked_items[:rough_rank_size]
 
 
 def fake_fine_rank(user_id, candidates, fine_rank_size):
