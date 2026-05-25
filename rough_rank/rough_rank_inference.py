@@ -2,12 +2,7 @@ from pathlib import Path
 
 import torch
 
-try:
-    from .rough_rank_three_tower import ThreeTowerRoughRankModel
-except ImportError:
-    from rough_rank_three_tower import ThreeTowerRoughRankModel
-
-
+from .rough_rank_three_tower import ThreeTowerRoughRankModel
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 ROUGH_RANK_MODEL_DIR = BASE_DIR / "rough_rank_model"
@@ -25,10 +20,7 @@ def load_checkpoint(model_path=MODEL_PATH, device=None):
     if device is None:
         device = get_device()
 
-    try:
-        return torch.load(model_path, map_location=device, weights_only=False)
-    except TypeError:
-        return torch.load(model_path, map_location=device)
+    return torch.load(model_path, map_location=device, weights_only=False)
 
 
 def build_model_from_checkpoint(checkpoint, device):

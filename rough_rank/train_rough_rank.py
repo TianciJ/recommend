@@ -6,12 +6,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset
 
-try:
-    from .rough_rank_three_tower import ThreeTowerRoughRankModel
-except ImportError:
-    from rough_rank_three_tower import ThreeTowerRoughRankModel
-
-
+from .rough_rank_three_tower import ThreeTowerRoughRankModel
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 ROUGH_RANK_MODEL_DIR = BASE_DIR / "rough_rank_model"

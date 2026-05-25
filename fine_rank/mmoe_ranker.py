@@ -1,13 +1,6 @@
-from pathlib import Path
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
-
-BASE_DIR = Path(__file__).resolve().parent.parent
-FINE_RANK_MODEL_DIR = BASE_DIR / "fine_rank_model"
-DEFAULT_MODEL_PATH = FINE_RANK_MODEL_DIR / "mmoe_ranker.pt"
 
 
 def get_device():
@@ -334,28 +327,3 @@ def inference_rank(model, batch, device, top_k=50, score_name="like"):
         "indexes": top_indexes.cpu().tolist(),
         "scores": top_scores.cpu().tolist(),
     }
-
-
-def save_model(model, model_path=DEFAULT_MODEL_PATH, extra_info=None):
-    FINE_RANK_MODEL_DIR.mkdir(exist_ok=True)
-
-    checkpoint = {
-        "model_state_dict": model.state_dict(),
-    }
-
-    if extra_info is not None:
-        checkpoint["extra_info"] = extra_info
-
-    torch.save(checkpoint, model_path)
-
-
-def load_model(model, model_path=DEFAULT_MODEL_PATH, device=None):
-    if device is None:
-        device = get_device()
-
-    checkpoint = torch.load(model_path, map_location=device)
-    model.load_state_dict(checkpoint["model_state_dict"])
-    model = model.to(device)
-    model.eval()
-
-    return model

@@ -5,16 +5,10 @@ import torch
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset
 
-try:
-    from .mmoe_ranker import MMoERanker
-    from .mmoe_ranker import evaluate
-    from .mmoe_ranker import get_device
-    from .mmoe_ranker import train_one_epoch
-except ImportError:
-    from mmoe_ranker import MMoERanker
-    from mmoe_ranker import evaluate
-    from mmoe_ranker import get_device
-    from mmoe_ranker import train_one_epoch
+from .mmoe_ranker import MMoERanker
+from .mmoe_ranker import evaluate
+from .mmoe_ranker import get_device
+from .mmoe_ranker import train_one_epoch
 
 from recall.two_tower import build_model_from_checkpoint as build_recall_model
 from rough_rank.rough_rank_inference import build_dense_features
@@ -63,10 +57,7 @@ class MMoEDataset(Dataset):
 
 
 def load_checkpoint(model_path, device):
-    try:
-        return torch.load(model_path, map_location=device, weights_only=False)
-    except TypeError:
-        return torch.load(model_path, map_location=device)
+    return torch.load(model_path, map_location=device, weights_only=False)
 
 
 def load_user_features(users_path=USERS_PATH):

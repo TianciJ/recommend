@@ -4,12 +4,8 @@ from pathlib import Path
 
 import torch
 
-try:
-    from .two_tower import build_model_from_checkpoint
-    from .two_tower import get_device
-except ImportError:
-    from two_tower import build_model_from_checkpoint
-    from two_tower import get_device
+from .two_tower import build_model_from_checkpoint
+from .two_tower import get_device
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -20,10 +16,7 @@ FINAL_MODEL_PATH = MODEL_DIR / "two_tower.pt"
 
 
 def load_checkpoint(model_path, device):
-    try:
-        return torch.load(model_path, map_location=device, weights_only=False)
-    except TypeError:
-        return torch.load(model_path, map_location=device)
+    return torch.load(model_path, map_location=device, weights_only=False)
 
 
 def find_model_paths(model_dir=MODEL_DIR):

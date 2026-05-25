@@ -10,8 +10,6 @@ from torch.utils.data import Dataset
 from .movie_utils import add_movie_titles
 from .movie_utils import print_recommendations
 
-
-
 BASE_DIR = Path(__file__).resolve().parent.parent
 TRAIN_DIR = BASE_DIR / "train_data"
 TRAIN_RATINGS_PATH = TRAIN_DIR / "ratings.dat"
