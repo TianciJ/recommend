@@ -20,6 +20,13 @@ MODEL_DIR = BASE_DIR / "model_weights"
 MODEL_PATH = MODEL_DIR / "two_tower.pt"
 
 
+def get_device():
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+
+    return torch.device("cpu")
+
+
 class RatingDataset(Dataset):
     def __init__(self, samples):
         self.samples = samples
@@ -52,36 +59,31 @@ class TwoTowerModel(nn.Module):
         age_count,
         occupation_count,
         genre_count,
-
     ):
         super().__init__()
 
-        # 用户侧特征：user_id、gender、age、occupation
+        # 用户塔输入：user_id_emb 32维 + gender_emb 4维 + age_emb 8维 + occupation_emb 8维
         self.user_embedding = nn.Embedding(user_count, 32)
         self.gender_embedding = nn.Embedding(gender_count, 4)
         self.age_embedding = nn.Embedding(age_count, 8)
         self.occupation_embedding = nn.Embedding(occupation_count, 8)
 
-        # 32 + 4 + 8 + 8 = 52
-        # MLP: 52 -> 128 -> 64 -> 64
-        user_input_dim = 52
+        # 用户塔 MLP: 52 -> 128 -> 64 -> 64
         self.user_tower = nn.Sequential(
-            nn.Linear(user_input_dim, 128),
+            nn.Linear(52, 128),
             nn.ReLU(),
             nn.Linear(128, 64),
             nn.ReLU(),
             nn.Linear(64, 64),
         )
 
-        # 电影侧特征：movie_id、genres
+        # 物品塔输入：movie_id_emb 32维 + genres_emb 16维
         self.movie_embedding = nn.Embedding(movie_count, 32)
         self.genre_layer = nn.Linear(genre_count, 16)
 
-        # 32 + 16 = 48
-        # MLP: 48 -> 128 -> 64 -> 64
-        movie_input_dim = 48
+        # 物品塔 MLP: 48 -> 128 -> 64 -> 64
         self.movie_tower = nn.Sequential(
-            nn.Linear(movie_input_dim, 128),
+            nn.Linear(48, 128),
             nn.ReLU(),
             nn.Linear(128, 64),
             nn.ReLU(),
@@ -97,27 +99,22 @@ class TwoTowerModel(nn.Module):
         movie_index,
         genre_vector,
     ):
-        # 取出用户 ID、性别、年龄、职业对应的向量
         user_id_vector = self.user_embedding(user_index)
         gender_vector = self.gender_embedding(gender_index)
         age_vector = self.age_embedding(age_index)
         occupation_vector = self.occupation_embedding(occupation_index)
 
-        # 拼接用户画像特征，然后送入用户塔
         user_input = torch.cat(
             [user_id_vector, gender_vector, age_vector, occupation_vector], dim=1
         )
         user_vector = self.user_tower(user_input)
 
-        # 取出电影 ID 向量，并把 genres 多热向量转换成电影类型向量
         movie_id_vector = self.movie_embedding(movie_index)
         genre_feature_vector = self.genre_layer(genre_vector)
 
-        # 拼接电影画像特征，然后送入电影塔
         movie_input = torch.cat([movie_id_vector, genre_feature_vector], dim=1)
         movie_vector = self.movie_tower(movie_input)
 
-        # 用户向量和电影向量做余弦相似度，得到匹配分数
         score = F.cosine_similarity(user_vector, movie_vector, dim=1)
         return score
 
@@ -130,7 +127,6 @@ def load_user_features(users_path=USERS_PATH):
 
     with users_path.open("r", encoding="utf-8") as users_file:
         for line in users_file:
-            # users.dat 格式：UserID::Gender::Age::Occupation::Zip-code
             user_id, gender, age, occupation, zip_code = line.strip().split("::")
             user_id = int(user_id)
 
@@ -158,7 +154,6 @@ def load_movie_features(movies_path=MOVIES_PATH):
 
     with movies_path.open("r", encoding="latin-1") as movies_file:
         for line in movies_file:
-            # movies.dat 格式：MovieID::Title::Genres
             movie_id, title, genres = line.strip().split("::")
             movie_id = int(movie_id)
             genre_list = genres.split("|")
@@ -173,8 +168,6 @@ def load_movie_features(movies_path=MOVIES_PATH):
     genre_count = len(genre_to_index)
 
     for movie_id in movie_genres:
-        # 一个电影可能有多个类型，所以这里用多热向量
-        # 例如 Action|Comedy 会在 Action 和 Comedy 两个位置都填 1
         genre_vector = [0] * genre_count
 
         for genre in movie_genres[movie_id]:
@@ -206,7 +199,6 @@ def load_train_samples(ratings_path=TRAIN_RATINGS_PATH):
             movie_id = int(movie_id)
             rating = int(rating)
 
-            # 3 分先跳过；4/5 分是喜欢，1/2 分是不喜欢
             if rating == 3:
                 continue
 
@@ -253,8 +245,17 @@ def load_train_samples(ratings_path=TRAIN_RATINGS_PATH):
     return samples, feature_info
 
 
-def train_model(epochs=3, batch_size=1024, embedding_dim=64, learning_rate=0.001):
+def move_batch_to_device(batch, device):
+    return {
+        name: tensor.to(device)
+        for name, tensor in batch.items()
+    }
+
+
+def train_model(epochs=3, batch_size=1024, learning_rate=0.001):
     samples, feature_info = load_train_samples()
+    device = get_device()
+    print(f"当前训练设备: {device}")
 
     dataset = RatingDataset(samples)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
@@ -266,16 +267,18 @@ def train_model(epochs=3, batch_size=1024, embedding_dim=64, learning_rate=0.001
         age_count=feature_info["age_count"],
         occupation_count=feature_info["occupation_count"],
         genre_count=feature_info["genre_count"],
-        embedding_dim=embedding_dim,
-    )
+    ).to(device)
 
     loss_fn = nn.BCEWithLogitsLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    MODEL_DIR.mkdir(exist_ok=True)
 
     for epoch in range(epochs):
         total_loss = 0
 
         for batch in dataloader:
+            batch = move_batch_to_device(batch, device)
+
             score = model(
                 batch["user_index"],
                 batch["gender_index"],
@@ -295,13 +298,23 @@ def train_model(epochs=3, batch_size=1024, embedding_dim=64, learning_rate=0.001
         average_loss = total_loss / len(dataloader)
         print(f"epoch={epoch + 1}, loss={average_loss:.4f}")
 
-    MODEL_DIR.mkdir(exist_ok=True)
-    feature_info["embedding_dim"] = embedding_dim
+        epoch_model_path = MODEL_DIR / f"model_epoch_{epoch + 1}.pt"
+        torch.save(
+            {
+                "model_state_dict": model.state_dict(),
+                "feature_info": feature_info,
+                "epoch": epoch + 1,
+                "loss": average_loss,
+            },
+            epoch_model_path,
+        )
+        print(f"第 {epoch + 1} 轮模型已保存到: {epoch_model_path}")
 
     torch.save(
         {
             "model_state_dict": model.state_dict(),
             "feature_info": feature_info,
+            "epoch": epochs,
         },
         MODEL_PATH,
     )
@@ -309,7 +322,7 @@ def train_model(epochs=3, batch_size=1024, embedding_dim=64, learning_rate=0.001
     print(f"模型已保存到: {MODEL_PATH}")
 
 
-def build_model_from_checkpoint(checkpoint):
+def build_model_from_checkpoint(checkpoint, device):
     feature_info = checkpoint["feature_info"]
 
     model = TwoTowerModel(
@@ -319,8 +332,7 @@ def build_model_from_checkpoint(checkpoint):
         age_count=feature_info["age_count"],
         occupation_count=feature_info["occupation_count"],
         genre_count=feature_info["genre_count"],
-        embedding_dim=feature_info["embedding_dim"],
-    )
+    ).to(device)
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
 
@@ -328,7 +340,8 @@ def build_model_from_checkpoint(checkpoint):
 
 
 def recommend_for_user(user_id, top_k=10):
-    checkpoint = torch.load(MODEL_PATH, map_location="cpu")
+    device = get_device()
+    checkpoint = torch.load(MODEL_PATH, map_location=device)
     feature_info = checkpoint["feature_info"]
 
     user_id_to_index = feature_info["user_id_to_index"]
@@ -340,33 +353,38 @@ def recommend_for_user(user_id, top_k=10):
         print("这个用户没有出现在训练集中，暂时无法用双塔召回")
         return []
 
-    model = build_model_from_checkpoint(checkpoint)
+    model = build_model_from_checkpoint(checkpoint, device)
 
     user_index = user_id_to_index[user_id]
     user_feature = user_features[user_id]
     movie_count = len(index_to_movie_id)
 
-    recommendations = []
-
     with torch.no_grad():
-        # 当前用户固定不变，依次和所有电影计算匹配分数
-        user_tensor = torch.tensor([user_index] * movie_count, dtype=torch.long)
+        user_tensor = torch.tensor(
+            [user_index] * movie_count, dtype=torch.long, device=device
+        )
         gender_tensor = torch.tensor(
-            [user_feature["gender_index"]] * movie_count, dtype=torch.long
+            [user_feature["gender_index"]] * movie_count,
+            dtype=torch.long,
+            device=device,
         )
         age_tensor = torch.tensor(
-            [user_feature["age_index"]] * movie_count, dtype=torch.long
+            [user_feature["age_index"]] * movie_count,
+            dtype=torch.long,
+            device=device,
         )
         occupation_tensor = torch.tensor(
-            [user_feature["occupation_index"]] * movie_count, dtype=torch.long
+            [user_feature["occupation_index"]] * movie_count,
+            dtype=torch.long,
+            device=device,
         )
-        movie_tensor = torch.arange(movie_count, dtype=torch.long)
+        movie_tensor = torch.arange(movie_count, dtype=torch.long, device=device)
 
         genre_vectors = []
         for movie_index in range(movie_count):
             movie_id = index_to_movie_id[movie_index]
             genre_vectors.append(movie_features[movie_id]["genre_vector"])
-        genre_tensor = torch.tensor(genre_vectors, dtype=torch.float)
+        genre_tensor = torch.tensor(genre_vectors, dtype=torch.float, device=device)
 
         scores = model(
             user_tensor,
@@ -377,7 +395,10 @@ def recommend_for_user(user_id, top_k=10):
             genre_tensor,
         )
         top_scores, top_movie_indexes = torch.topk(scores, top_k)
+        top_scores = top_scores.cpu()
+        top_movie_indexes = top_movie_indexes.cpu()
 
+    recommendations = []
     for score, movie_index in zip(top_scores, top_movie_indexes):
         movie_id = index_to_movie_id[int(movie_index)]
         recommendations.append(
