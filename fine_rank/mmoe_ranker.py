@@ -51,17 +51,9 @@ class TaskTower(nn.Module):
 
 
 class MMoERanker(nn.Module):
-    def __init__(
-        self,
-        user_count,
-        movie_count,
-        gender_count,
-        age_count,
-        occupation_count,
-        genre_count,
-        num_experts=4,
-        expert_dim=64,
-    ):
+    def __init__(self,user_count,movie_count,gender_count,age_count,
+        occupation_count,genre_count,num_experts=4,expert_dim=64,):
+        
         super().__init__()
 
         self.num_experts = num_experts

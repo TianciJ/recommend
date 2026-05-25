@@ -1,18 +1,13 @@
 from pathlib import Path
-
 import torch
-
 from .mmoe_ranker import MMoERanker
 from .mmoe_ranker import get_device
-
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_MODEL_PATH = BASE_DIR / "fine_rank_model" / "mmoe_epoch_6.pt"
 
-
 def load_checkpoint(model_path, device):
     return torch.load(model_path, map_location=device, weights_only=False)
-
 
 def build_model_from_checkpoint(checkpoint, device):
     feature_info = checkpoint["feature_info"]

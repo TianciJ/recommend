@@ -213,7 +213,7 @@ def two_tower_recall(recaller, user_id, recall_size):
 
 def main():
     pipeline = RecommenderPipeline()
-    recommendations = pipeline.recommend(user_id=112365, top_k=10, recall_size=300)
+    recommendations = pipeline.recommend(user_id=15, top_k=10, recall_size=300)
 
     for rank, item in enumerate(recommendations, start=1):
         print(
