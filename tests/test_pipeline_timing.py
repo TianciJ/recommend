@@ -73,6 +73,21 @@ class RankerShouldNotRun:
         raise AssertionError("ranker should not run when recall is empty")
 
 
+class FakeUserProfileRepository:
+    def __init__(self, profile):
+        self.profile = profile
+        self.requested_user_ids = []
+
+    def get_user_profile(self, user_id):
+        self.requested_user_ids.append(user_id)
+        return self.profile
+
+
+class RaisingUserProfileRepository:
+    def get_user_profile(self, user_id):
+        raise RuntimeError("database unavailable")
+
+
 class PipelineTimingTest(unittest.TestCase):
     def build_pipeline(self):
         pipeline = RecommenderPipeline.__new__(RecommenderPipeline)
@@ -81,15 +96,17 @@ class PipelineTimingTest(unittest.TestCase):
         pipeline.fine_ranker = FakeFineRanker()
         pipeline.reranker = FakeReranker()
         pipeline.cold_start_recommender = FakeColdStartRecommender()
+        pipeline.user_profile_repository = None
         return pipeline
 
-    def build_cold_start_pipeline(self):
+    def build_cold_start_pipeline(self, user_profile_repository=None):
         pipeline = RecommenderPipeline.__new__(RecommenderPipeline)
         pipeline.recaller = FakeEmptyRecaller()
         pipeline.rough_ranker = RankerShouldNotRun()
         pipeline.fine_ranker = RankerShouldNotRun()
         pipeline.reranker = FakeReranker()
         pipeline.cold_start_recommender = FakeColdStartRecommender()
+        pipeline.user_profile_repository = user_profile_repository
         return pipeline
 
     def test_recommend_with_timing_returns_recommendations_and_stage_metadata(self):
@@ -165,6 +182,55 @@ class PipelineTimingTest(unittest.TestCase):
         self.assertEqual(timing["stages"]["cold_start"]["item_count"], 3)
         self.assertNotIn("rough_rank", timing["stages"])
         self.assertNotIn("fine_rank", timing["stages"])
+
+    def test_recommend_uses_repository_profile_for_cold_start(self):
+        repository = FakeUserProfileRepository(
+            profile={"user_id": 900001, "age": 35, "occupation": 7}
+        )
+        pipeline = self.build_cold_start_pipeline(user_profile_repository=repository)
+
+        recommendations = pipeline.recommend(user_id=900001, top_k=2)
+
+        self.assertEqual(repository.requested_user_ids, [900001])
+        self.assertEqual(recommendations[0]["age"], 35)
+        self.assertEqual(recommendations[0]["occupation"], 7)
+
+    def test_recommend_prefers_explicit_profile_over_repository_profile(self):
+        repository = FakeUserProfileRepository(
+            profile={"user_id": 900001, "age": 35, "occupation": 7}
+        )
+        pipeline = self.build_cold_start_pipeline(user_profile_repository=repository)
+
+        recommendations = pipeline.recommend(
+            user_id=900001,
+            age=25,
+            occupation=4,
+            top_k=2,
+        )
+
+        self.assertEqual(recommendations[0]["age"], 25)
+        self.assertEqual(recommendations[0]["occupation"], 4)
+
+    def test_recommend_keeps_cold_start_when_repository_returns_none(self):
+        repository = FakeUserProfileRepository(profile=None)
+        pipeline = self.build_cold_start_pipeline(user_profile_repository=repository)
+
+        recommendations = pipeline.recommend(user_id=900001, top_k=2)
+
+        self.assertEqual(len(recommendations), 2)
+        self.assertIsNone(recommendations[0]["age"])
+        self.assertIsNone(recommendations[0]["occupation"])
+
+    def test_recommend_keeps_cold_start_when_repository_raises(self):
+        pipeline = self.build_cold_start_pipeline(
+            user_profile_repository=RaisingUserProfileRepository()
+        )
+
+        recommendations = pipeline.recommend(user_id=900001, top_k=2)
+
+        self.assertEqual(len(recommendations), 2)
+        self.assertIsNone(recommendations[0]["age"])
+        self.assertIsNone(recommendations[0]["occupation"])
 
     def test_format_recommendation_line_handles_cold_start_item(self):
         item = {

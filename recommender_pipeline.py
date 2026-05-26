@@ -8,12 +8,19 @@ MOVIES_PATH = BASE_DIR / "data" / "movies.dat"
 
 
 class RecommenderPipeline:
-    def __init__(self):
+    def __init__(self, user_profile_repository=None):
         # 模型只在初始化时加载一次，避免每次请求重复加载权重
         self.recaller = build_recaller()
         self.rough_ranker = build_rough_ranker()
         self.fine_ranker = build_fine_ranker()
-        self.cold_start_recommender = build_cold_start_recommender()
+        self.user_profile_repository = (
+            user_profile_repository
+            if user_profile_repository is not None
+            else build_user_profile_repository()
+        )
+        self.cold_start_recommender = build_cold_start_recommender(
+            self.user_profile_repository
+        )
         self.reranker = Reranker()
 
     def recall(self, user_id, recall_size=300):
@@ -105,12 +112,44 @@ class RecommenderPipeline:
         return final_items
 
     def cold_start(self, user_id, age=None, occupation=None, top_k=20):
+        age, occupation = self.resolve_cold_start_profile(
+            user_id=user_id,
+            age=age,
+            occupation=occupation,
+        )
         return self.cold_start_recommender.recommend(
             user_id=user_id,
             age=age,
             occupation=occupation,
             top_k=top_k,
         )
+
+    def resolve_cold_start_profile(self, user_id, age=None, occupation=None):
+        resolved_age = age
+        resolved_occupation = occupation
+
+        if resolved_age is not None and resolved_occupation is not None:
+            return resolved_age, resolved_occupation
+
+        if self.user_profile_repository is None:
+            return resolved_age, resolved_occupation
+
+        try:
+            profile = self.user_profile_repository.get_user_profile(user_id)
+        except Exception as error:
+            print(f"MySQL user profile lookup failed; using cold-start fallback: {error}")
+            return resolved_age, resolved_occupation
+
+        if profile is None:
+            return resolved_age, resolved_occupation
+
+        if resolved_age is None:
+            resolved_age = profile.get("age")
+
+        if resolved_occupation is None:
+            resolved_occupation = profile.get("occupation")
+
+        return resolved_age, resolved_occupation
 
     def recommend_with_timing(
         self,
@@ -357,10 +396,30 @@ def build_fine_ranker():
     return MMoEFineRanker()
 
 
-def build_cold_start_recommender():
+def build_cold_start_recommender(user_profile_repository=None):
     from cold_start import ColdStartRecommender
 
-    return ColdStartRecommender()
+    if user_profile_repository is None:
+        return ColdStartRecommender()
+
+    try:
+        return ColdStartRecommender(
+            user_profiles=user_profile_repository.list_user_profiles()
+        )
+    except Exception as error:
+        print(f"MySQL cold-start profile loading failed; using dat fallback: {error}")
+        return ColdStartRecommender()
+
+
+def build_user_profile_repository():
+    from database.mysql_client import get_mysql_config_from_env
+
+    if get_mysql_config_from_env() is None:
+        return None
+
+    from database import UserProfileRepository
+
+    return UserProfileRepository()
 
 
 def two_tower_recall(recaller, user_id, recall_size):

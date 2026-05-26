@@ -64,6 +64,32 @@ class ColdStartRecommenderTest(unittest.TestCase):
             {"global"},
         )
 
+    def test_can_build_segments_from_mysql_user_profiles_without_users_dat(self):
+        base_path = Path(__file__).resolve().parent / "fixtures" / "cold_start"
+        missing_users_path = base_path / "missing-users.dat"
+        ratings_path = base_path / "ratings.dat"
+        movies_path = base_path / "movies.dat"
+
+        recommender = ColdStartRecommender(
+            users_path=missing_users_path,
+            ratings_path=ratings_path,
+            movies_path=movies_path,
+            user_profiles={
+                1: {"age": "25", "occupation": "4"},
+                2: {"age": "35", "occupation": "7"},
+            },
+        )
+
+        recommendations = recommender.recommend(
+            user_id=900001,
+            age=25,
+            occupation=4,
+            top_k=3,
+        )
+
+        self.assertEqual(recommendations[0]["movie_id"], 10)
+        self.assertEqual(recommendations[0]["cold_start_source"], "age_occupation")
+
 
 if __name__ == "__main__":
     unittest.main()

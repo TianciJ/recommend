@@ -15,8 +15,13 @@ class ColdStartRecommender:
         users_path=TRAIN_USERS_PATH,
         ratings_path=TRAIN_RATINGS_PATH,
         movies_path=MOVIES_PATH,
+        user_profiles=None,
     ):
-        self.user_profiles = load_user_profiles(users_path)
+        self.user_profiles = (
+            normalize_user_profiles(user_profiles)
+            if user_profiles is not None
+            else load_user_profiles(users_path)
+        )
         self.movie_info = load_movie_info(movies_path)
         self.movie_stats = {}
         self.segment_movie_counts = {}
@@ -188,6 +193,16 @@ def load_user_profiles(users_path):
             }
 
     return user_profiles
+
+
+def normalize_user_profiles(user_profiles):
+    return {
+        int(user_id): {
+            "age": normalize_profile_value(profile.get("age")),
+            "occupation": normalize_profile_value(profile.get("occupation")),
+        }
+        for user_id, profile in user_profiles.items()
+    }
 
 
 def load_movie_info(movies_path):
