@@ -497,7 +497,8 @@ def recommend_for_user_id_or_register(
     top_k=20,
 ):
     if user_profile_repository is None:
-        raise RuntimeError("MySQL user repository is required for interactive recommendation.")
+        output_func("MySQL user repository is not configured. Running recommendation fallback.")
+        return pipeline.recommend(user_id=user_id, top_k=top_k)
 
     profile = user_profile_repository.get_user_profile(user_id)
 

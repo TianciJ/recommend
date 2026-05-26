@@ -357,6 +357,27 @@ class PipelineTimingTest(unittest.TestCase):
             [{"user_id": 900123, "age": 25, "occupation": 4, "top_k": 3}],
         )
 
+    def test_interactive_without_repository_uses_existing_recommend_flow(self):
+        pipeline = FakeInteractivePipeline()
+        outputs = []
+
+        recommendations = recommend_for_user_id_or_register(
+            user_id=15857,
+            user_profile_repository=None,
+            pipeline=pipeline,
+            input_func=lambda prompt: self.fail("input should not be requested"),
+            output_func=outputs.append,
+            top_k=4,
+        )
+
+        self.assertEqual(recommendations, [{"movie_id": 10, "recall_source": "two_tower"}])
+        self.assertEqual(pipeline.recommend_calls, [{"user_id": 15857, "top_k": 4}])
+        self.assertEqual(pipeline.cold_start_calls, [])
+        self.assertEqual(
+            outputs,
+            ["MySQL user repository is not configured. Running recommendation fallback."],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
