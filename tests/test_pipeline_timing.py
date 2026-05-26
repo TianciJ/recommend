@@ -1,6 +1,6 @@
 import unittest
 
-from recommender_pipeline import RecommenderPipeline
+from recommender_pipeline import RecommenderPipeline, format_recommendation_line
 
 
 class FakeRecaller:
@@ -165,6 +165,22 @@ class PipelineTimingTest(unittest.TestCase):
         self.assertEqual(timing["stages"]["cold_start"]["item_count"], 3)
         self.assertNotIn("rough_rank", timing["stages"])
         self.assertNotIn("fine_rank", timing["stages"])
+
+    def test_format_recommendation_line_handles_cold_start_item(self):
+        item = {
+            "movie_id": 1,
+            "title": "cold-movie-1",
+            "rerank_primary_genre": "Drama",
+            "cold_start_score": 1.0,
+            "recall_score": 1.0,
+            "recall_source": "cold_start",
+        }
+
+        line = format_recommendation_line(1, item)
+
+        self.assertIn("cold_start_score=1.0000", line)
+        self.assertIn("rough_rank_score=-", line)
+        self.assertIn("fine_rank_score=-", line)
 
 
 if __name__ == "__main__":

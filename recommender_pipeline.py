@@ -308,6 +308,35 @@ def record_stage_timing(timing, stage_name, start_time, items):
     }
 
 
+def format_score(score):
+    if score is None:
+        return "-"
+
+    return f"{score:.4f}"
+
+
+def format_recommendation_line(rank, item):
+    movie_id = item.get("movie_id", item.get("item_id", ""))
+    parts = [
+        f"{rank}. movie_id={movie_id}",
+        f"title={item.get('title', '')}",
+        f"genre={item.get('rerank_primary_genre', '')}",
+        f"recall_score={format_score(item.get('recall_score'))}",
+    ]
+
+    if "cold_start_score" in item:
+        parts.append(f"cold_start_score={format_score(item.get('cold_start_score'))}")
+
+    parts.extend(
+        [
+            f"rough_rank_score={format_score(item.get('rough_rank_score'))}",
+            f"fine_rank_score={format_score(item.get('fine_rank_score'))}",
+        ]
+    )
+
+    return " ".join(parts)
+
+
 def build_recaller():
     from recall.two_tower import TwoTowerRecaller
 
@@ -354,17 +383,10 @@ def two_tower_recall(recaller, user_id, recall_size):
 
 def main():
     pipeline = RecommenderPipeline()
-    recommendations = pipeline.recommend(user_id=15, top_k=10, recall_size=300)
+    recommendations = pipeline.recommend(user_id=15857, top_k=20, recall_size=300)
 
     for rank, item in enumerate(recommendations, start=1):
-        print(
-            f"{rank}. movie_id={item['movie_id']} "
-            f"title={item.get('title', '')} "
-            f"genre={item.get('rerank_primary_genre', '')} "
-            f"recall_score={item['recall_score']:.4f} "
-            f"rough_rank_score={item['rough_rank_score']:.4f} "
-            f"fine_rank_score={item['fine_rank_score']:.4f}"
-        )
+        print(format_recommendation_line(rank, item))
 
 
 if __name__ == "__main__":
