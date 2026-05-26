@@ -1,6 +1,14 @@
 import argparse
 from pathlib import Path
 
+try:
+    from scripts.bootstrap import add_project_root_to_path
+except ModuleNotFoundError:
+    from bootstrap import add_project_root_to_path
+
+
+add_project_root_to_path()
+
 from database import MysqlDatasetRepository
 from database import UserProfileRepository
 
