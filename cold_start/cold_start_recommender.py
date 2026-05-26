@@ -16,20 +16,26 @@ class ColdStartRecommender:
         ratings_path=TRAIN_RATINGS_PATH,
         movies_path=MOVIES_PATH,
         user_profiles=None,
+        ratings=None,
+        movies=None,
     ):
         self.user_profiles = (
             normalize_user_profiles(user_profiles)
             if user_profiles is not None
             else load_user_profiles(users_path)
         )
-        self.movie_info = load_movie_info(movies_path)
+        self.movie_info = (
+            normalize_movie_info(movies)
+            if movies is not None
+            else load_movie_info(movies_path)
+        )
         self.movie_stats = {}
         self.segment_movie_counts = {}
         self.age_movie_counts = {}
         self.occupation_movie_counts = {}
         self.global_movie_counts = Counter()
 
-        self._build_rating_statistics(ratings_path)
+        self._build_rating_statistics(ratings_path=ratings_path, ratings=ratings)
         self.max_rating_count_log = self._get_max_rating_count_log()
 
     def recommend(self, user_id, age=None, occupation=None, top_k=20):
@@ -79,35 +85,33 @@ class ColdStartRecommender:
         )
         return diversify_by_primary_genre(ranked_items, top_k)
 
-    def _build_rating_statistics(self, ratings_path):
-        with ratings_path.open("r", encoding="utf-8") as ratings_file:
-            for line in ratings_file:
-                user_id, movie_id, rating, timestamp = line.strip().split("::")
-                user_id = int(user_id)
-                movie_id = int(movie_id)
-                rating = int(rating)
+    def _build_rating_statistics(self, ratings_path, ratings=None):
+        for rating_row in iter_rating_rows(ratings_path=ratings_path, ratings=ratings):
+            user_id = int(rating_row["user_id"])
+            movie_id = int(rating_row["movie_id"])
+            rating = int(rating_row["rating"])
 
-                if movie_id not in self.movie_info:
-                    continue
+            if movie_id not in self.movie_info:
+                continue
 
-                self._add_movie_rating(movie_id, rating)
+            self._add_movie_rating(movie_id, rating)
 
-                if rating < 4:
-                    continue
+            if rating < 4:
+                continue
 
-                self.global_movie_counts[movie_id] += 1
-                user_profile = self.user_profiles.get(user_id)
+            self.global_movie_counts[movie_id] += 1
+            user_profile = self.user_profiles.get(user_id)
 
-                if user_profile is None:
-                    continue
+            if user_profile is None:
+                continue
 
-                age = user_profile["age"]
-                occupation = user_profile["occupation"]
-                segment_key = (age, occupation)
+            age = user_profile["age"]
+            occupation = user_profile["occupation"]
+            segment_key = (age, occupation)
 
-                self.segment_movie_counts.setdefault(segment_key, Counter())[movie_id] += 1
-                self.age_movie_counts.setdefault(age, Counter())[movie_id] += 1
-                self.occupation_movie_counts.setdefault(occupation, Counter())[movie_id] += 1
+            self.segment_movie_counts.setdefault(segment_key, Counter())[movie_id] += 1
+            self.age_movie_counts.setdefault(age, Counter())[movie_id] += 1
+            self.occupation_movie_counts.setdefault(occupation, Counter())[movie_id] += 1
 
         for movie_id, stats in self.movie_stats.items():
             stats["avg_rating"] = stats["rating_sum"] / stats["rating_count"]
@@ -205,6 +209,23 @@ def normalize_user_profiles(user_profiles):
     }
 
 
+def iter_rating_rows(ratings_path, ratings=None):
+    if ratings is not None:
+        for rating in ratings:
+            yield rating
+        return
+
+    with ratings_path.open("r", encoding="utf-8") as ratings_file:
+        for line in ratings_file:
+            user_id, movie_id, rating, timestamp = line.strip().split("::")
+            yield {
+                "user_id": int(user_id),
+                "movie_id": int(movie_id),
+                "rating": int(rating),
+                "timestamp": int(timestamp),
+            }
+
+
 def load_movie_info(movies_path):
     movie_info = {}
 
@@ -217,6 +238,16 @@ def load_movie_info(movies_path):
             }
 
     return movie_info
+
+
+def normalize_movie_info(movies):
+    return {
+        int(movie["movie_id"]): {
+            "title": movie["title"],
+            "genres": list(movie["genres"]),
+        }
+        for movie in movies
+    }
 
 
 def get_primary_genre(genres):

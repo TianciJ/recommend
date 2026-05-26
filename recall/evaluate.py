@@ -41,41 +41,79 @@ def model_sort_key(model_path):
 
 
 def load_user_seen_movies(ratings_path=TRAIN_RATINGS_PATH):
+    mysql_dataset = load_mysql_dataset_if_configured(split="train")
+
+    if mysql_dataset is not None:
+        return build_user_seen_movies(mysql_dataset["ratings"])
+
+    return build_user_seen_movies(load_ratings_from_dat(ratings_path))
+
+
+def build_user_seen_movies(ratings):
     user_seen_movies = {}
 
-    with ratings_path.open("r", encoding="utf-8") as ratings_file:
-        for line in ratings_file:
-            user_id, movie_id, rating, timestamp = line.strip().split("::")
-            user_id = int(user_id)
-            movie_id = int(movie_id)
+    for rating in ratings:
+        user_id = int(rating["user_id"])
+        movie_id = int(rating["movie_id"])
 
-            if user_id not in user_seen_movies:
-                user_seen_movies[user_id] = set()
+        if user_id not in user_seen_movies:
+            user_seen_movies[user_id] = set()
 
-            user_seen_movies[user_id].add(movie_id)
+        user_seen_movies[user_id].add(movie_id)
 
     return user_seen_movies
 
 
 def load_test_liked_movies(ratings_path=TEST_RATINGS_PATH):
+    mysql_dataset = load_mysql_dataset_if_configured(split="test")
+
+    if mysql_dataset is not None:
+        return build_test_liked_movies(mysql_dataset["ratings"])
+
+    return build_test_liked_movies(load_ratings_from_dat(ratings_path))
+
+
+def build_test_liked_movies(ratings):
     test_liked_movies = {}
+
+    for rating_row in ratings:
+        user_id = int(rating_row["user_id"])
+        movie_id = int(rating_row["movie_id"])
+        rating = int(rating_row["rating"])
+
+        if rating < 4:
+            continue
+
+        if user_id not in test_liked_movies:
+            test_liked_movies[user_id] = set()
+
+        test_liked_movies[user_id].add(movie_id)
+
+    return test_liked_movies
+
+
+def load_ratings_from_dat(ratings_path):
+    ratings = []
 
     with ratings_path.open("r", encoding="utf-8") as ratings_file:
         for line in ratings_file:
             user_id, movie_id, rating, timestamp = line.strip().split("::")
-            user_id = int(user_id)
-            movie_id = int(movie_id)
-            rating = int(rating)
+            ratings.append(
+                {
+                    "user_id": int(user_id),
+                    "movie_id": int(movie_id),
+                    "rating": int(rating),
+                    "timestamp": int(timestamp),
+                }
+            )
 
-            if rating < 4:
-                continue
+    return ratings
 
-            if user_id not in test_liked_movies:
-                test_liked_movies[user_id] = set()
 
-            test_liked_movies[user_id].add(movie_id)
+def load_mysql_dataset_if_configured(split="train"):
+    from database.dataset_repository import load_mysql_dataset
 
-    return test_liked_movies
+    return load_mysql_dataset(split=split)
 
 
 def build_movie_tensors(feature_info, device):

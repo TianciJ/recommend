@@ -1,10 +1,10 @@
-from database import UserProfileRepository
+from database import MysqlDatasetRepository
 
 
 def main():
-    repository = UserProfileRepository()
+    repository = MysqlDatasetRepository()
     repository.initialize_schema()
-    print("MySQL users table is ready.")
+    print("MySQL tables are ready.")
 
 
 if __name__ == "__main__":

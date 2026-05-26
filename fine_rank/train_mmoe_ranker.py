@@ -11,6 +11,10 @@ from .mmoe_ranker import get_device
 from .mmoe_ranker import train_one_epoch
 
 from recall.two_tower import build_model_from_checkpoint as build_recall_model
+from recall.two_tower import load_movies_from_dat
+from recall.two_tower import load_mysql_dataset_if_configured
+from recall.two_tower import load_ratings_from_dat
+from recall.two_tower import load_users_from_dat
 from rough_rank.rough_rank_inference import build_dense_features
 from rough_rank.rough_rank_inference import build_model_from_checkpoint as build_rough_model
 
@@ -60,39 +64,66 @@ def load_checkpoint(model_path, device):
     return torch.load(model_path, map_location=device, weights_only=False)
 
 
-def load_user_features(users_path=USERS_PATH):
+def load_user_features(users_path=USERS_PATH, users=None):
     user_features = {}
     gender_to_index = {}
     age_to_index = {}
     occupation_to_index = {}
 
-    with users_path.open("r", encoding="utf-8") as users_file:
-        for line in users_file:
-            user_id, gender, age, occupation, zip_code = line.strip().split("::")
-            user_id = int(user_id)
+    if users is None:
+        users = load_users_from_dat(users_path)
 
-            if gender not in gender_to_index:
-                gender_to_index[gender] = len(gender_to_index)
+    for user in users:
+        user_id = int(user["user_id"])
+        gender = str(user["gender"])
+        age = str(user["age"])
+        occupation = str(user["occupation"])
 
-            if age not in age_to_index:
-                age_to_index[age] = len(age_to_index)
+        if gender not in gender_to_index:
+            gender_to_index[gender] = len(gender_to_index)
 
-            if occupation not in occupation_to_index:
-                occupation_to_index[occupation] = len(occupation_to_index)
+        if age not in age_to_index:
+            age_to_index[age] = len(age_to_index)
 
-            user_features[user_id] = {
-                "gender": gender_to_index[gender],
-                "age": age_to_index[age],
-                "occupation": occupation_to_index[occupation],
-            }
+        if occupation not in occupation_to_index:
+            occupation_to_index[occupation] = len(occupation_to_index)
+
+        user_features[user_id] = {
+            "gender": gender_to_index[gender],
+            "age": age_to_index[age],
+            "occupation": occupation_to_index[occupation],
+        }
 
     return user_features, gender_to_index, age_to_index, occupation_to_index
 
 
-def load_movie_features(movies_path=MOVIES_PATH):
+def load_movie_features(movies_path=MOVIES_PATH, movies=None):
     movie_features = {}
     genre_to_index = {}
     max_genre_length = 0
+
+    if movies is not None:
+        for movie in movies:
+            movie_id = int(movie["movie_id"])
+            genre_indexes = []
+
+            for genre in movie["genres"]:
+                if genre not in genre_to_index:
+                    genre_to_index[genre] = len(genre_to_index) + 1
+
+                genre_indexes.append(genre_to_index[genre])
+
+            max_genre_length = max(max_genre_length, len(genre_indexes))
+            movie_features[movie_id] = {
+                "genres": genre_indexes,
+            }
+
+        for movie_id in movie_features:
+            genres = movie_features[movie_id]["genres"]
+            padding_count = max_genre_length - len(genres)
+            movie_features[movie_id]["genres"] = genres + [0] * padding_count
+
+        return movie_features, genre_to_index, max_genre_length
 
     with movies_path.open("r", encoding="latin-1") as movies_file:
         for line in movies_file:
@@ -121,29 +152,38 @@ def load_movie_features(movies_path=MOVIES_PATH):
     return movie_features, genre_to_index, max_genre_length
 
 
-def build_feature_info():
+def build_feature_info(users=None, movies=None, ratings=None):
+    if users is None and movies is None and ratings is None:
+        mysql_dataset = load_mysql_dataset_if_configured(split="train")
+
+        if mysql_dataset is not None:
+            users = mysql_dataset["users"]
+            movies = mysql_dataset["movies"]
+            ratings = mysql_dataset["ratings"]
+
+    if ratings is None:
+        ratings = load_ratings_from_dat(TRAIN_RATINGS_PATH)
+
     user_features, gender_to_index, age_to_index, occupation_to_index = (
-        load_user_features()
+        load_user_features(users=users)
     )
-    movie_features, genre_to_index, max_genre_length = load_movie_features()
+    movie_features, genre_to_index, max_genre_length = load_movie_features(movies=movies)
 
     user_id_to_index = {}
     movie_id_to_index = {}
     index_to_movie_id = {}
 
-    with TRAIN_RATINGS_PATH.open("r", encoding="utf-8") as ratings_file:
-        for line in ratings_file:
-            user_id, movie_id, rating, timestamp = line.strip().split("::")
-            user_id = int(user_id)
-            movie_id = int(movie_id)
+    for rating_row in ratings:
+        user_id = int(rating_row["user_id"])
+        movie_id = int(rating_row["movie_id"])
 
-            if user_id not in user_id_to_index:
-                user_id_to_index[user_id] = len(user_id_to_index)
+        if user_id not in user_id_to_index:
+            user_id_to_index[user_id] = len(user_id_to_index)
 
-            if movie_id not in movie_id_to_index:
-                movie_index = len(movie_id_to_index)
-                movie_id_to_index[movie_id] = movie_index
-                index_to_movie_id[movie_index] = movie_id
+        if movie_id not in movie_id_to_index:
+            movie_index = len(movie_id_to_index)
+            movie_id_to_index[movie_id] = movie_index
+            index_to_movie_id[movie_index] = movie_id
 
     return {
         "user_features": user_features,
@@ -159,44 +199,51 @@ def build_feature_info():
     }
 
 
-def load_base_samples(ratings_path, feature_info, skip_unknown=True):
+def load_base_samples(ratings_path, feature_info, skip_unknown=True, ratings=None):
+    if ratings is None:
+        split = "test" if ratings_path == TEST_RATINGS_PATH else "train"
+        mysql_dataset = load_mysql_dataset_if_configured(split=split)
+        ratings = (
+            mysql_dataset["ratings"]
+            if mysql_dataset is not None
+            else load_ratings_from_dat(ratings_path)
+        )
+
     samples = []
     user_features = feature_info["user_features"]
     movie_features = feature_info["movie_features"]
     user_id_to_index = feature_info["user_id_to_index"]
     movie_id_to_index = feature_info["movie_id_to_index"]
 
-    with ratings_path.open("r", encoding="utf-8") as ratings_file:
-        for line in ratings_file:
-            user_id, movie_id, rating, timestamp = line.strip().split("::")
-            raw_user_id = int(user_id)
-            raw_movie_id = int(movie_id)
-            rating = int(rating)
+    for rating_row in ratings:
+        raw_user_id = int(rating_row["user_id"])
+        raw_movie_id = int(rating_row["movie_id"])
+        rating = int(rating_row["rating"])
 
-            if skip_unknown and (
-                raw_user_id not in user_id_to_index
-                or raw_movie_id not in movie_id_to_index
-            ):
-                continue
+        if skip_unknown and (
+            raw_user_id not in user_id_to_index
+            or raw_movie_id not in movie_id_to_index
+        ):
+            continue
 
-            user_feature = user_features[raw_user_id]
-            movie_feature = movie_features[raw_movie_id]
+        user_feature = user_features[raw_user_id]
+        movie_feature = movie_features[raw_movie_id]
 
-            samples.append(
-                {
-                    "raw_user_id": raw_user_id,
-                    "raw_movie_id": raw_movie_id,
-                    "user_id": user_id_to_index[raw_user_id],
-                    "gender": user_feature["gender"],
-                    "age": user_feature["age"],
-                    "occupation": user_feature["occupation"],
-                    "movie_id": movie_id_to_index[raw_movie_id],
-                    "genres": movie_feature["genres"],
-                    "like_label": 1 if rating >= 4 else 0,
-                    "high_rating_label": 1 if rating == 5 else 0,
-                    "rating_label": rating / 5,
-                }
-            )
+        samples.append(
+            {
+                "raw_user_id": raw_user_id,
+                "raw_movie_id": raw_movie_id,
+                "user_id": user_id_to_index[raw_user_id],
+                "gender": user_feature["gender"],
+                "age": user_feature["age"],
+                "occupation": user_feature["occupation"],
+                "movie_id": movie_id_to_index[raw_movie_id],
+                "genres": movie_feature["genres"],
+                "like_label": 1 if rating >= 4 else 0,
+                "high_rating_label": 1 if rating == 5 else 0,
+                "rating_label": rating / 5,
+            }
+        )
 
     return samples
 

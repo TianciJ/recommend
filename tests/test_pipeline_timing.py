@@ -1,6 +1,9 @@
 import unittest
 
-from recommender_pipeline import RecommenderPipeline, format_recommendation_line
+from recommender_pipeline import RecommenderPipeline
+from recommender_pipeline import format_recommendation_line
+from recommender_pipeline import load_movie_genres
+from recommender_pipeline import load_user_seen_movies
 
 
 class FakeRecaller:
@@ -247,6 +250,21 @@ class PipelineTimingTest(unittest.TestCase):
         self.assertIn("cold_start_score=1.0000", line)
         self.assertIn("rough_rank_score=-", line)
         self.assertIn("fine_rank_score=-", line)
+
+    def test_load_user_seen_movies_can_use_mysql_rating_rows(self):
+        ratings = [
+            {"user_id": 1, "movie_id": 10, "rating": 5, "timestamp": 100},
+            {"user_id": 1, "movie_id": 20, "rating": 3, "timestamp": 200},
+        ]
+
+        self.assertEqual(load_user_seen_movies(ratings=ratings), {1: {10, 20}})
+
+    def test_load_movie_genres_can_use_mysql_movie_rows(self):
+        movies = [
+            {"movie_id": 10, "title": "Movie A", "genres": ["Drama", "Comedy"]},
+        ]
+
+        self.assertEqual(load_movie_genres(movies=movies), {10: ["Drama", "Comedy"]})
 
 
 if __name__ == "__main__":

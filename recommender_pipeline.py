@@ -8,7 +8,7 @@ MOVIES_PATH = BASE_DIR / "data" / "movies.dat"
 
 
 class RecommenderPipeline:
-    def __init__(self, user_profile_repository=None):
+    def __init__(self, user_profile_repository=None, dataset_repository=None):
         # 模型只在初始化时加载一次，避免每次请求重复加载权重
         self.recaller = build_recaller()
         self.rough_ranker = build_rough_ranker()
@@ -18,10 +18,16 @@ class RecommenderPipeline:
             if user_profile_repository is not None
             else build_user_profile_repository()
         )
-        self.cold_start_recommender = build_cold_start_recommender(
-            self.user_profile_repository
+        self.dataset_repository = (
+            dataset_repository
+            if dataset_repository is not None
+            else build_dataset_repository()
         )
-        self.reranker = Reranker()
+        self.cold_start_recommender = build_cold_start_recommender(
+            self.user_profile_repository,
+            self.dataset_repository,
+        )
+        self.reranker = Reranker(dataset_repository=self.dataset_repository)
 
     def recall(self, user_id, recall_size=300):
         # 召回阶段：双塔召回 300 部候选电影
@@ -241,9 +247,19 @@ class RecommenderPipeline:
 
 
 class Reranker:
-    def __init__(self):
-        self.user_seen_movies = load_user_seen_movies()
-        self.movie_genres = load_movie_genres()
+    def __init__(self, dataset_repository=None):
+        ratings = None
+        movies = None
+
+        if dataset_repository is not None:
+            try:
+                ratings = dataset_repository.list_ratings(split="train")
+                movies = dataset_repository.list_movies()
+            except Exception as error:
+                print(f"MySQL rerank data loading failed; using dat fallback: {error}")
+
+        self.user_seen_movies = load_user_seen_movies(ratings=ratings)
+        self.movie_genres = load_movie_genres(movies=movies)
 
     def rerank(self, user_id, ranked_items, top_k=20):
         unseen_items = self.filter_seen_movies(user_id, ranked_items)
@@ -308,8 +324,15 @@ class Reranker:
         return genres[0]
 
 
-def load_user_seen_movies(ratings_path=TRAIN_RATINGS_PATH):
+def load_user_seen_movies(ratings_path=TRAIN_RATINGS_PATH, ratings=None):
     user_seen_movies = {}
+
+    if ratings is not None:
+        for rating in ratings:
+            user_id = int(rating["user_id"])
+            movie_id = int(rating["movie_id"])
+            user_seen_movies.setdefault(user_id, set()).add(movie_id)
+        return user_seen_movies
 
     with ratings_path.open("r", encoding="utf-8") as ratings_file:
         for line in ratings_file:
@@ -325,8 +348,13 @@ def load_user_seen_movies(ratings_path=TRAIN_RATINGS_PATH):
     return user_seen_movies
 
 
-def load_movie_genres(movies_path=MOVIES_PATH):
+def load_movie_genres(movies_path=MOVIES_PATH, movies=None):
     movie_genres = {}
+
+    if movies is not None:
+        for movie in movies:
+            movie_genres[int(movie["movie_id"])] = list(movie["genres"])
+        return movie_genres
 
     with movies_path.open("r", encoding="latin-1") as movies_file:
         for line in movies_file:
@@ -396,15 +424,24 @@ def build_fine_ranker():
     return MMoEFineRanker()
 
 
-def build_cold_start_recommender(user_profile_repository=None):
+def build_cold_start_recommender(user_profile_repository=None, dataset_repository=None):
     from cold_start import ColdStartRecommender
 
     if user_profile_repository is None:
         return ColdStartRecommender()
 
     try:
+        ratings = None
+        movies = None
+
+        if dataset_repository is not None:
+            ratings = dataset_repository.list_ratings(split="train")
+            movies = dataset_repository.list_movies()
+
         return ColdStartRecommender(
-            user_profiles=user_profile_repository.list_user_profiles()
+            user_profiles=user_profile_repository.list_user_profiles(),
+            ratings=ratings,
+            movies=movies,
         )
     except Exception as error:
         print(f"MySQL cold-start profile loading failed; using dat fallback: {error}")
@@ -420,6 +457,17 @@ def build_user_profile_repository():
     from database import UserProfileRepository
 
     return UserProfileRepository()
+
+
+def build_dataset_repository():
+    from database.mysql_client import get_mysql_config_from_env
+
+    if get_mysql_config_from_env() is None:
+        return None
+
+    from database import MysqlDatasetRepository
+
+    return MysqlDatasetRepository()
 
 
 def two_tower_recall(recaller, user_id, recall_size):

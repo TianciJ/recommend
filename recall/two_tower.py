@@ -118,50 +118,74 @@ class TwoTowerModel(nn.Module):
         return score
 
 
-def load_user_features(users_path=USERS_PATH):
+def load_user_features(users_path=USERS_PATH, users=None):
     user_features = {}
     gender_to_index = {}
     age_to_index = {}
     occupation_to_index = {}
 
-    with users_path.open("r", encoding="utf-8") as users_file:
-        for line in users_file:
-            user_id, gender, age, occupation, zip_code = line.strip().split("::")
-            user_id = int(user_id)
+    if users is None:
+        users = load_users_from_dat(users_path)
 
-            if gender not in gender_to_index:
-                gender_to_index[gender] = len(gender_to_index)
+    for user in users:
+        user_id = int(user["user_id"])
+        gender = str(user["gender"])
+        age = str(user["age"])
+        occupation = str(user["occupation"])
 
-            if age not in age_to_index:
-                age_to_index[age] = len(age_to_index)
+        if gender not in gender_to_index:
+            gender_to_index[gender] = len(gender_to_index)
 
-            if occupation not in occupation_to_index:
-                occupation_to_index[occupation] = len(occupation_to_index)
+        if age not in age_to_index:
+            age_to_index[age] = len(age_to_index)
 
-            user_features[user_id] = {
-                "gender_index": gender_to_index[gender],
-                "age_index": age_to_index[age],
-                "occupation_index": occupation_to_index[occupation],
-            }
+        if occupation not in occupation_to_index:
+            occupation_to_index[occupation] = len(occupation_to_index)
+
+        user_features[user_id] = {
+            "gender_index": gender_to_index[gender],
+            "age_index": age_to_index[age],
+            "occupation_index": occupation_to_index[occupation],
+        }
 
     return user_features, gender_to_index, age_to_index, occupation_to_index
 
 
-def load_movie_features(movies_path=MOVIES_PATH):
+def load_users_from_dat(users_path=USERS_PATH):
+    users = []
+
+    with users_path.open("r", encoding="utf-8") as users_file:
+        for line in users_file:
+            user_id, gender, age, occupation, zip_code = line.strip().split("::")
+            users.append(
+                {
+                    "user_id": int(user_id),
+                    "gender": gender,
+                    "age": int(age),
+                    "occupation": int(occupation),
+                    "zip_code": zip_code,
+                }
+            )
+
+    return users
+
+
+def load_movie_features(movies_path=MOVIES_PATH, movies=None):
     movie_genres = {}
     genre_to_index = {}
 
-    with movies_path.open("r", encoding="latin-1") as movies_file:
-        for line in movies_file:
-            movie_id, title, genres = line.strip().split("::")
-            movie_id = int(movie_id)
-            genre_list = genres.split("|")
+    if movies is None:
+        movies = load_movies_from_dat(movies_path)
 
-            for genre in genre_list:
-                if genre not in genre_to_index:
-                    genre_to_index[genre] = len(genre_to_index)
+    for movie in movies:
+        movie_id = int(movie["movie_id"])
+        genre_list = list(movie["genres"])
 
-            movie_genres[movie_id] = genre_list
+        for genre in genre_list:
+            if genre not in genre_to_index:
+                genre_to_index[genre] = len(genre_to_index)
+
+        movie_genres[movie_id] = genre_list
 
     movie_features = {}
     genre_count = len(genre_to_index)
@@ -180,54 +204,98 @@ def load_movie_features(movies_path=MOVIES_PATH):
     return movie_features, genre_to_index
 
 
-def load_train_samples(ratings_path=TRAIN_RATINGS_PATH):
+def load_movies_from_dat(movies_path=MOVIES_PATH):
+    movies = []
+
+    with movies_path.open("r", encoding="latin-1") as movies_file:
+        for line in movies_file:
+            movie_id, title, genres = line.strip().split("::")
+            movies.append(
+                {
+                    "movie_id": int(movie_id),
+                    "title": title,
+                    "genres": genres.split("|"),
+                }
+            )
+
+    return movies
+
+
+def load_ratings_from_dat(ratings_path=TRAIN_RATINGS_PATH):
+    ratings = []
+
+    with ratings_path.open("r", encoding="utf-8") as ratings_file:
+        for line in ratings_file:
+            user_id, movie_id, rating, timestamp = line.strip().split("::")
+            ratings.append(
+                {
+                    "user_id": int(user_id),
+                    "movie_id": int(movie_id),
+                    "rating": int(rating),
+                    "timestamp": int(timestamp),
+                }
+            )
+
+    return ratings
+
+
+def load_train_samples(ratings_path=TRAIN_RATINGS_PATH, ratings=None, users=None, movies=None):
+    if ratings is None and users is None and movies is None:
+        mysql_dataset = load_mysql_dataset_if_configured(split="train")
+
+        if mysql_dataset is not None:
+            ratings = mysql_dataset["ratings"]
+            users = mysql_dataset["users"]
+            movies = mysql_dataset["movies"]
+
+    if ratings is None:
+        ratings = load_ratings_from_dat(ratings_path)
+
     samples = []
     user_id_to_index = {}
     movie_id_to_index = {}
     index_to_movie_id = {}
 
     user_features, gender_to_index, age_to_index, occupation_to_index = (
-        load_user_features()
+        load_user_features(users=users)
     )
-    movie_features, genre_to_index = load_movie_features()
+    movie_features, genre_to_index = load_movie_features(movies=movies)
 
-    with ratings_path.open("r", encoding="utf-8") as ratings_file:
-        for line in ratings_file:
-            user_id, movie_id, rating, timestamp = line.strip().split("::")
-            user_id = int(user_id)
-            movie_id = int(movie_id)
-            rating = int(rating)
+    for rating_row in ratings:
+        user_id = int(rating_row["user_id"])
+        movie_id = int(rating_row["movie_id"])
+        rating = int(rating_row["rating"])
 
-            if rating == 3:
-                continue
+        if rating == 3:
+            continue
 
-            if rating >= 4:
-                label = 1
-            else:
-                label = 0
+        if rating >= 4:
+            label = 1
+        else:
+            label = 0
 
-            if user_id not in user_id_to_index:
-                user_id_to_index[user_id] = len(user_id_to_index)
+        if user_id not in user_id_to_index:
+            user_id_to_index[user_id] = len(user_id_to_index)
 
-            if movie_id not in movie_id_to_index:
-                movie_index = len(movie_id_to_index)
-                movie_id_to_index[movie_id] = movie_index
-                index_to_movie_id[movie_index] = movie_id
+        if movie_id not in movie_id_to_index:
+            movie_index = len(movie_id_to_index)
+            movie_id_to_index[movie_id] = movie_index
+            index_to_movie_id[movie_index] = movie_id
 
-            user_feature = user_features[user_id]
-            movie_feature = movie_features[movie_id]
+        user_feature = user_features[user_id]
+        movie_feature = movie_features[movie_id]
 
-            samples.append(
-                {
-                    "user_index": user_id_to_index[user_id],
-                    "gender_index": user_feature["gender_index"],
-                    "age_index": user_feature["age_index"],
-                    "occupation_index": user_feature["occupation_index"],
-                    "movie_index": movie_id_to_index[movie_id],
-                    "genre_vector": movie_feature["genre_vector"],
-                    "label": label,
-                }
-            )
+        samples.append(
+            {
+                "user_index": user_id_to_index[user_id],
+                "gender_index": user_feature["gender_index"],
+                "age_index": user_feature["age_index"],
+                "occupation_index": user_feature["occupation_index"],
+                "movie_index": movie_id_to_index[movie_id],
+                "genre_vector": movie_feature["genre_vector"],
+                "label": label,
+            }
+        )
 
     feature_info = {
         "user_id_to_index": user_id_to_index,
@@ -242,6 +310,12 @@ def load_train_samples(ratings_path=TRAIN_RATINGS_PATH):
     }
 
     return samples, feature_info
+
+
+def load_mysql_dataset_if_configured(split="train"):
+    from database.dataset_repository import load_mysql_dataset
+
+    return load_mysql_dataset(split=split)
 
 
 def move_batch_to_device(batch, device):

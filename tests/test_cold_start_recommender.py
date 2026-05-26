@@ -64,20 +64,29 @@ class ColdStartRecommenderTest(unittest.TestCase):
             {"global"},
         )
 
-    def test_can_build_segments_from_mysql_user_profiles_without_users_dat(self):
+    def test_can_build_segments_from_mysql_rows_without_dat_files(self):
         base_path = Path(__file__).resolve().parent / "fixtures" / "cold_start"
         missing_users_path = base_path / "missing-users.dat"
-        ratings_path = base_path / "ratings.dat"
-        movies_path = base_path / "movies.dat"
+        missing_ratings_path = base_path / "missing-ratings.dat"
+        missing_movies_path = base_path / "missing-movies.dat"
 
         recommender = ColdStartRecommender(
             users_path=missing_users_path,
-            ratings_path=ratings_path,
-            movies_path=movies_path,
+            ratings_path=missing_ratings_path,
+            movies_path=missing_movies_path,
             user_profiles={
                 1: {"age": "25", "occupation": "4"},
                 2: {"age": "35", "occupation": "7"},
             },
+            ratings=[
+                {"user_id": 1, "movie_id": 10, "rating": 5, "timestamp": 100},
+                {"user_id": 1, "movie_id": 10, "rating": 5, "timestamp": 101},
+                {"user_id": 2, "movie_id": 20, "rating": 5, "timestamp": 200},
+            ],
+            movies=[
+                {"movie_id": 10, "title": "Movie A", "genres": ["Drama"]},
+                {"movie_id": 20, "title": "Movie B", "genres": ["Comedy"]},
+            ],
         )
 
         recommendations = recommender.recommend(
