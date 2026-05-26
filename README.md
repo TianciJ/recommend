@@ -6,7 +6,7 @@
 双塔召回 -> 三塔粗排 -> MMoE 精排 -> 重排
 ```
 
-系统目前主要面向训练集中出现过的老用户。对于新用户冷启动，目前还没有正式接入画像推荐或热门高分兜底策略。
+系统目前主要面向训练集中出现过的老用户，同时已经接入第一版新用户冷启动兜底：当新用户没有历史行为、无法进入双塔召回时，会根据 `age + occupation` 画像分群、电影热度和平均评分生成推荐。
 
 ## 1. 项目结构
 
@@ -50,6 +50,9 @@ recommend/
     mmoe_ranker.py              # MMoE 精排模型结构
     train_mmoe_ranker.py        # MMoE 精排训练脚本
     mmoe_inference.py           # MMoE 精排推理
+
+  cold_start/                   # 新用户冷启动模块
+    cold_start_recommender.py    # 基于 age + occupation 的画像分群冷启动
 
   fine_rank_model/              # 精排模型权重
     mmoe_ranker.pt
@@ -143,6 +146,19 @@ recommendations = pipeline.recommend(
     fine_rank_size=50,
 )
 ```
+
+新用户冷启动调用示例：
+
+```python
+recommendations = pipeline.recommend(
+    user_id=900001,
+    age=25,
+    occupation=4,
+    top_k=10,
+)
+```
+
+当 `user_id` 不在模型训练用户中，或召回/排序阶段返回空结果时，pipeline 会自动走冷启动兜底。
 
 运行示例：
 
@@ -553,7 +569,7 @@ pipeline.recommend(user_id=3)
 1. 双塔召回预计算所有电影向量
 2. 粗排统计特征改成 user/movie 查表
 3. 精排 genres 特征预先转成 tensor
-4. pipeline 增加冷启动兜底
+4. 冷启动支持用户显式选择 preferred_genres
 5. 增加完整链路评估
 6. 增加显式交叉特征，例如用户历史 genre 偏好 × 当前电影 genre、用户画像 × 电影类型、recall_score × coarse_score
 7. 接入 MySQL 数据源
@@ -573,11 +589,11 @@ pipeline.recommend(user_id=3)
 当前系统还有这些限制：
 
 ```text
-1. 主要支持训练集中出现过的老用户
-2. 新用户冷启动还没有正式接入
+1. 主链路主要支持训练集中出现过的老用户
+2. 新用户冷启动目前是规则兜底版本，还没有接入在线行为画像或类型偏好问卷
 3. 没有 API 服务，只能本地脚本调用
 4. 没有数据库接入，当前仍基于 dat 文件训练
-5. 完整链路还没有统一评估脚本
+5. 冷启动效果还没有单独的离线评估脚本
 6. 模型参数需要手动训练和替换
 ```
 

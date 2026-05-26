@@ -13,6 +13,7 @@ class RecommenderPipeline:
         self.recaller = build_recaller()
         self.rough_ranker = build_rough_ranker()
         self.fine_ranker = build_fine_ranker()
+        self.cold_start_recommender = build_cold_start_recommender()
         self.reranker = Reranker()
 
     def recall(self, user_id, recall_size=300):
@@ -54,8 +55,18 @@ class RecommenderPipeline:
         recall_size=300,
         rough_rank_size=100,
         fine_rank_size=50,
+        age=None,
+        occupation=None,
     ):
         recalled_items = self.recall(user_id, recall_size)
+
+        if not recalled_items:
+            return self.cold_start(
+                user_id=user_id,
+                age=age,
+                occupation=occupation,
+                top_k=top_k,
+            )
 
         rough_ranked_items = self.rough_rank(
             user_id=user_id,
@@ -63,11 +74,27 @@ class RecommenderPipeline:
             rough_rank_size=rough_rank_size,
         )
 
+        if not rough_ranked_items:
+            return self.cold_start(
+                user_id=user_id,
+                age=age,
+                occupation=occupation,
+                top_k=top_k,
+            )
+
         fine_ranked_items = self.fine_rank(
             user_id=user_id,
             candidates=rough_ranked_items,
             fine_rank_size=fine_rank_size,
         )
+
+        if not fine_ranked_items:
+            return self.cold_start(
+                user_id=user_id,
+                age=age,
+                occupation=occupation,
+                top_k=top_k,
+            )
 
         final_items = self.rerank(
             user_id=user_id,
@@ -77,6 +104,14 @@ class RecommenderPipeline:
 
         return final_items
 
+    def cold_start(self, user_id, age=None, occupation=None, top_k=20):
+        return self.cold_start_recommender.recommend(
+            user_id=user_id,
+            age=age,
+            occupation=occupation,
+            top_k=top_k,
+        )
+
     def recommend_with_timing(
         self,
         user_id,
@@ -84,6 +119,8 @@ class RecommenderPipeline:
         recall_size=300,
         rough_rank_size=100,
         fine_rank_size=50,
+        age=None,
+        occupation=None,
     ):
         timing = {"stages": {}}
         total_start = perf_counter()
@@ -91,6 +128,17 @@ class RecommenderPipeline:
         stage_start = perf_counter()
         recalled_items = self.recall(user_id, recall_size)
         record_stage_timing(timing, "recall", stage_start, recalled_items)
+
+        if not recalled_items:
+            final_items = self.timed_cold_start(
+                timing=timing,
+                user_id=user_id,
+                age=age,
+                occupation=occupation,
+                top_k=top_k,
+            )
+            timing["total_ms"] = elapsed_ms(total_start)
+            return final_items, timing
 
         stage_start = perf_counter()
         rough_ranked_items = self.rough_rank(
@@ -100,6 +148,17 @@ class RecommenderPipeline:
         )
         record_stage_timing(timing, "rough_rank", stage_start, rough_ranked_items)
 
+        if not rough_ranked_items:
+            final_items = self.timed_cold_start(
+                timing=timing,
+                user_id=user_id,
+                age=age,
+                occupation=occupation,
+                top_k=top_k,
+            )
+            timing["total_ms"] = elapsed_ms(total_start)
+            return final_items, timing
+
         stage_start = perf_counter()
         fine_ranked_items = self.fine_rank(
             user_id=user_id,
@@ -107,6 +166,17 @@ class RecommenderPipeline:
             fine_rank_size=fine_rank_size,
         )
         record_stage_timing(timing, "fine_rank", stage_start, fine_ranked_items)
+
+        if not fine_ranked_items:
+            final_items = self.timed_cold_start(
+                timing=timing,
+                user_id=user_id,
+                age=age,
+                occupation=occupation,
+                top_k=top_k,
+            )
+            timing["total_ms"] = elapsed_ms(total_start)
+            return final_items, timing
 
         stage_start = perf_counter()
         final_items = self.rerank(
@@ -118,6 +188,17 @@ class RecommenderPipeline:
 
         timing["total_ms"] = elapsed_ms(total_start)
         return final_items, timing
+
+    def timed_cold_start(self, timing, user_id, age=None, occupation=None, top_k=20):
+        stage_start = perf_counter()
+        final_items = self.cold_start(
+            user_id=user_id,
+            age=age,
+            occupation=occupation,
+            top_k=top_k,
+        )
+        record_stage_timing(timing, "cold_start", stage_start, final_items)
+        return final_items
 
 
 class Reranker:
@@ -245,6 +326,12 @@ def build_fine_ranker():
     from fine_rank.mmoe_inference import MMoEFineRanker
 
     return MMoEFineRanker()
+
+
+def build_cold_start_recommender():
+    from cold_start import ColdStartRecommender
+
+    return ColdStartRecommender()
 
 
 def two_tower_recall(recaller, user_id, recall_size):

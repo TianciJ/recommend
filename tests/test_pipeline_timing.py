@@ -11,6 +11,11 @@ class FakeRecaller:
         ]
 
 
+class FakeEmptyRecaller:
+    def recommend(self, user_id, top_k):
+        return []
+
+
 class FakeRoughRanker:
     def rank(self, user_id, recalled_items, top_k):
         return [
@@ -44,6 +49,30 @@ class FakeReranker:
         ]
 
 
+class FakeColdStartRecommender:
+    def recommend(self, user_id, age=None, occupation=None, top_k=20):
+        return [
+            {
+                "item_id": index,
+                "movie_id": index,
+                "title": f"cold-movie-{index}",
+                "cold_start_score": 1.0 / index,
+                "recall_score": 1.0 / index,
+                "recall_source": "cold_start",
+                "cold_start_source": "age_occupation",
+                "rerank_primary_genre": "Drama",
+                "age": age,
+                "occupation": occupation,
+            }
+            for index in range(1, top_k + 1)
+        ]
+
+
+class RankerShouldNotRun:
+    def rank(self, *args, **kwargs):
+        raise AssertionError("ranker should not run when recall is empty")
+
+
 class PipelineTimingTest(unittest.TestCase):
     def build_pipeline(self):
         pipeline = RecommenderPipeline.__new__(RecommenderPipeline)
@@ -51,6 +80,16 @@ class PipelineTimingTest(unittest.TestCase):
         pipeline.rough_ranker = FakeRoughRanker()
         pipeline.fine_ranker = FakeFineRanker()
         pipeline.reranker = FakeReranker()
+        pipeline.cold_start_recommender = FakeColdStartRecommender()
+        return pipeline
+
+    def build_cold_start_pipeline(self):
+        pipeline = RecommenderPipeline.__new__(RecommenderPipeline)
+        pipeline.recaller = FakeEmptyRecaller()
+        pipeline.rough_ranker = RankerShouldNotRun()
+        pipeline.fine_ranker = RankerShouldNotRun()
+        pipeline.reranker = FakeReranker()
+        pipeline.cold_start_recommender = FakeColdStartRecommender()
         return pipeline
 
     def test_recommend_with_timing_returns_recommendations_and_stage_metadata(self):
@@ -95,6 +134,37 @@ class PipelineTimingTest(unittest.TestCase):
         self.assertIsInstance(recommendations, list)
         self.assertEqual(len(recommendations), 2)
         self.assertNotIsInstance(recommendations, tuple)
+
+    def test_recommend_uses_cold_start_when_recall_is_empty(self):
+        pipeline = self.build_cold_start_pipeline()
+
+        recommendations = pipeline.recommend(
+            user_id=900001,
+            age=25,
+            occupation=4,
+            top_k=3,
+        )
+
+        self.assertEqual(len(recommendations), 3)
+        self.assertEqual(recommendations[0]["recall_source"], "cold_start")
+        self.assertEqual(recommendations[0]["age"], 25)
+        self.assertEqual(recommendations[0]["occupation"], 4)
+
+    def test_recommend_with_timing_records_cold_start_stage(self):
+        pipeline = self.build_cold_start_pipeline()
+
+        recommendations, timing = pipeline.recommend_with_timing(
+            user_id=900001,
+            age=25,
+            occupation=4,
+            top_k=3,
+        )
+
+        self.assertEqual(len(recommendations), 3)
+        self.assertEqual(timing["stages"]["recall"]["item_count"], 0)
+        self.assertEqual(timing["stages"]["cold_start"]["item_count"], 3)
+        self.assertNotIn("rough_rank", timing["stages"])
+        self.assertNotIn("fine_rank", timing["stages"])
 
 
 if __name__ == "__main__":
