@@ -5,8 +5,10 @@ CREATE_USERS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS users (
     user_id BIGINT PRIMARY KEY AUTO_INCREMENT,
     username VARCHAR(64) NOT NULL UNIQUE,
+    gender VARCHAR(8) NOT NULL DEFAULT 'U',
     age INT NOT NULL,
     occupation INT NOT NULL,
+    zip_code VARCHAR(32) NOT NULL DEFAULT '',
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) AUTO_INCREMENT = 900001;
@@ -94,6 +96,71 @@ class UserProfileRepository:
             for row in rows
         }
 
+    def list_users(self):
+        connection = self.connection_factory()
+
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT user_id, username, gender, age, occupation, zip_code
+                    FROM users
+                    ORDER BY user_id
+                    """
+                )
+                rows = cursor.fetchall()
+        finally:
+            connection.close()
+
+        return [
+            {
+                "user_id": int(row["user_id"]),
+                "username": row["username"],
+                "gender": row["gender"],
+                "age": int(row["age"]),
+                "occupation": int(row["occupation"]),
+                "zip_code": row["zip_code"],
+            }
+            for row in rows
+        ]
+
+    def upsert_users(self, users):
+        params = [
+            (
+                int(user["user_id"]),
+                validate_username(user["username"]),
+                validate_gender(user.get("gender", "U")),
+                normalize_age_to_movielens_bucket(user["age"]),
+                validate_occupation(user["occupation"]),
+                str(user.get("zip_code", "")),
+            )
+            for user in users
+        ]
+        if not params:
+            return
+
+        connection = self.connection_factory()
+
+        try:
+            with connection.cursor() as cursor:
+                cursor.executemany(
+                    """
+                    INSERT INTO users (
+                        user_id, username, gender, age, occupation, zip_code
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE
+                        username = VALUES(username),
+                        gender = VALUES(gender),
+                        age = VALUES(age),
+                        occupation = VALUES(occupation),
+                        zip_code = VALUES(zip_code)
+                    """,
+                    params,
+                )
+        finally:
+            connection.close()
+
 
 def validate_username(username):
     if username is None:
@@ -117,6 +184,15 @@ def validate_occupation(occupation):
         raise ValueError("occupation must be between 0 and 20")
 
     return occupation
+
+
+def validate_gender(gender):
+    normalized_gender = str(gender or "U").strip() or "U"
+
+    if len(normalized_gender) > 8:
+        raise ValueError("gender must be at most 8 characters")
+
+    return normalized_gender
 
 
 def normalize_age_to_movielens_bucket(age):

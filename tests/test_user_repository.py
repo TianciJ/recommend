@@ -49,6 +49,7 @@ class FakeCursor:
         self.rows = rows or []
         self.lastrowid = lastrowid
         self.executed = []
+        self.executemany_calls = []
 
     def __enter__(self):
         return self
@@ -58,6 +59,9 @@ class FakeCursor:
 
     def execute(self, sql, params=None):
         self.executed.append((sql, params))
+
+    def executemany(self, sql, params):
+        self.executemany_calls.append((sql, params))
 
     def fetchone(self):
         return self.row
@@ -154,6 +158,61 @@ class UserProfileRepositoryTest(unittest.TestCase):
         )
         self.assertTrue(connection.closed)
 
+    def test_list_users_returns_full_training_profiles(self):
+        cursor = FakeCursor(
+            rows=[
+                {
+                    "user_id": 1,
+                    "username": "movielens_1",
+                    "gender": "F",
+                    "age": 25,
+                    "occupation": 4,
+                    "zip_code": "12345",
+                }
+            ]
+        )
+        connection = FakeConnection(cursor)
+        repository = UserProfileRepository(connection_factory=lambda: connection)
+
+        users = repository.list_users()
+
+        self.assertEqual(
+            users,
+            [
+                {
+                    "user_id": 1,
+                    "username": "movielens_1",
+                    "gender": "F",
+                    "age": 25,
+                    "occupation": 4,
+                    "zip_code": "12345",
+                }
+            ],
+        )
+
+    def test_upsert_users_imports_movielens_profiles(self):
+        cursor = FakeCursor()
+        connection = FakeConnection(cursor)
+        repository = UserProfileRepository(connection_factory=lambda: connection)
+
+        repository.upsert_users(
+            [
+                {
+                    "user_id": 1,
+                    "username": "movielens_1",
+                    "gender": "F",
+                    "age": 25,
+                    "occupation": 4,
+                    "zip_code": "12345",
+                }
+            ]
+        )
+
+        sql, params = cursor.executemany_calls[0]
+        self.assertIn("INSERT INTO users", sql)
+        self.assertEqual(params, [(1, "movielens_1", "F", 25, 4, "12345")])
+        self.assertTrue(connection.closed)
+
     def test_create_user_rejects_invalid_profile(self):
         repository = UserProfileRepository(connection_factory=lambda: FakeConnection(FakeCursor()))
 
@@ -175,6 +234,11 @@ class UserProfileScriptImportTest(unittest.TestCase):
 
     def test_register_script_can_be_imported(self):
         from scripts.register_user import main
+
+        self.assertTrue(callable(main))
+
+    def test_import_movielens_script_can_be_imported(self):
+        from scripts.import_movielens_to_mysql import main
 
         self.assertTrue(callable(main))
 
