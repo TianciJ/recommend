@@ -488,9 +488,53 @@ def two_tower_recall(recaller, user_id, recall_size):
     return candidates
 
 
+def recommend_for_user_id_or_register(
+    user_id,
+    user_profile_repository,
+    pipeline,
+    input_func=input,
+    output_func=print,
+    top_k=20,
+):
+    if user_profile_repository is None:
+        raise RuntimeError("MySQL user repository is required for interactive recommendation.")
+
+    profile = user_profile_repository.get_user_profile(user_id)
+
+    if profile is not None:
+        output_func(f"user_id={user_id} found. Running full recommendation flow.")
+        return pipeline.recommend(user_id=user_id, top_k=top_k)
+
+    output_func(f"user_id={user_id} not found. Registering a new user profile.")
+    username = input_func("username: ").strip()
+    age = int(input_func("age: ").strip())
+    occupation = int(input_func("occupation: ").strip())
+
+    registered_user_id = user_profile_repository.create_user(
+        username=username,
+        age=age,
+        occupation=occupation,
+    )
+    output_func(f"Registered user_id={registered_user_id}. Running cold start.")
+
+    return pipeline.cold_start(
+        user_id=registered_user_id,
+        age=age,
+        occupation=occupation,
+        top_k=top_k,
+    )
+
+
 def main():
-    pipeline = RecommenderPipeline()
-    recommendations = pipeline.recommend(user_id=15857, top_k=20, recall_size=300)
+    user_profile_repository = build_user_profile_repository()
+    pipeline = RecommenderPipeline(user_profile_repository=user_profile_repository)
+    user_id = int(input("user_id: ").strip())
+    recommendations = recommend_for_user_id_or_register(
+        user_id=user_id,
+        user_profile_repository=user_profile_repository,
+        pipeline=pipeline,
+        top_k=20,
+    )
 
     for rank, item in enumerate(recommendations, start=1):
         print(format_recommendation_line(rank, item))

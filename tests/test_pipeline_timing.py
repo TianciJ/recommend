@@ -2,6 +2,7 @@ import unittest
 
 from recommender_pipeline import RecommenderPipeline
 from recommender_pipeline import format_recommendation_line
+from recommender_pipeline import recommend_for_user_id_or_register
 from recommender_pipeline import load_movie_genres
 from recommender_pipeline import load_user_seen_movies
 
@@ -89,6 +90,49 @@ class FakeUserProfileRepository:
 class RaisingUserProfileRepository:
     def get_user_profile(self, user_id):
         raise RuntimeError("database unavailable")
+
+
+class FakeRegistrationRepository:
+    def __init__(self, profile=None, new_user_id=900123):
+        self.profile = profile
+        self.new_user_id = new_user_id
+        self.created_users = []
+        self.requested_user_ids = []
+
+    def get_user_profile(self, user_id):
+        self.requested_user_ids.append(user_id)
+        return self.profile
+
+    def create_user(self, username, age, occupation):
+        self.created_users.append(
+            {
+                "username": username,
+                "age": age,
+                "occupation": occupation,
+            }
+        )
+        return self.new_user_id
+
+
+class FakeInteractivePipeline:
+    def __init__(self):
+        self.recommend_calls = []
+        self.cold_start_calls = []
+
+    def recommend(self, user_id, top_k=20):
+        self.recommend_calls.append({"user_id": user_id, "top_k": top_k})
+        return [{"movie_id": 10, "recall_source": "two_tower"}]
+
+    def cold_start(self, user_id, age=None, occupation=None, top_k=20):
+        self.cold_start_calls.append(
+            {
+                "user_id": user_id,
+                "age": age,
+                "occupation": occupation,
+                "top_k": top_k,
+            }
+        )
+        return [{"movie_id": 20, "recall_source": "cold_start"}]
 
 
 class PipelineTimingTest(unittest.TestCase):
@@ -265,6 +309,53 @@ class PipelineTimingTest(unittest.TestCase):
         ]
 
         self.assertEqual(load_movie_genres(movies=movies), {10: ["Drama", "Comedy"]})
+
+    def test_interactive_existing_user_uses_full_recommend_flow(self):
+        repository = FakeRegistrationRepository(
+            profile={"user_id": 100, "age": 25, "occupation": 4}
+        )
+        pipeline = FakeInteractivePipeline()
+        prompts = []
+
+        recommendations = recommend_for_user_id_or_register(
+            user_id=100,
+            user_profile_repository=repository,
+            pipeline=pipeline,
+            input_func=lambda prompt: prompts.append(prompt) or "",
+            output_func=lambda message: None,
+            top_k=5,
+        )
+
+        self.assertEqual(recommendations, [{"movie_id": 10, "recall_source": "two_tower"}])
+        self.assertEqual(pipeline.recommend_calls, [{"user_id": 100, "top_k": 5}])
+        self.assertEqual(pipeline.cold_start_calls, [])
+        self.assertEqual(repository.created_users, [])
+        self.assertEqual(prompts, [])
+
+    def test_interactive_missing_user_registers_then_uses_cold_start(self):
+        repository = FakeRegistrationRepository(profile=None, new_user_id=900123)
+        pipeline = FakeInteractivePipeline()
+        answers = iter(["alice", "25", "4"])
+
+        recommendations = recommend_for_user_id_or_register(
+            user_id=999999,
+            user_profile_repository=repository,
+            pipeline=pipeline,
+            input_func=lambda prompt: next(answers),
+            output_func=lambda message: None,
+            top_k=3,
+        )
+
+        self.assertEqual(recommendations, [{"movie_id": 20, "recall_source": "cold_start"}])
+        self.assertEqual(
+            repository.created_users,
+            [{"username": "alice", "age": 25, "occupation": 4}],
+        )
+        self.assertEqual(pipeline.recommend_calls, [])
+        self.assertEqual(
+            pipeline.cold_start_calls,
+            [{"user_id": 900123, "age": 25, "occupation": 4, "top_k": 3}],
+        )
 
 
 if __name__ == "__main__":
