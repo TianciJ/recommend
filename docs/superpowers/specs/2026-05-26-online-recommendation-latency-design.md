@@ -149,6 +149,19 @@ After timing identifies the slowest stages, optimize in measured order. The like
 
 Phase 2 should preserve recommendation behavior as much as possible, then compare latency before and after each optimization.
 
+## Phase 3 Direction: Explicit Cross Features
+
+After latency measurement and lookup-table optimization are stable, add explicit cross-feature work as a separate feature-enhancement phase. This is not part of the current implementation phase.
+
+Candidate cross features:
+
+1. User historical genre preference x candidate movie genre match.
+2. User profile fields such as gender, age, and occupation x candidate movie genres.
+3. User average rating or activity level x movie average rating or popularity.
+4. Upstream model score interaction such as `recall_score x coarse_score`.
+
+The goal of this phase is to make ranking features more interpretable and give the rough-rank or fine-rank model stronger user-item interaction signals beyond the current implicit interactions learned by MLP/MMoE layers.
+
 ## Acceptance Criteria
 
 1. Existing `pipeline.recommend()` callers continue to work without return-format changes.
