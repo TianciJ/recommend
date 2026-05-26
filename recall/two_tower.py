@@ -4,6 +4,7 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.nn import Module, Linear, ReLU, Sequential, Embedding,Relu
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset
 
@@ -62,31 +63,31 @@ class TwoTowerModel(nn.Module):
         super().__init__()
 
         # 用户塔输入：user_id_emb 32维 + gender_emb 4维 + age_emb 8维 + occupation_emb 8维
-        self.user_embedding = nn.Embedding(user_count, 32)
-        self.gender_embedding = nn.Embedding(gender_count, 4)
-        self.age_embedding = nn.Embedding(age_count, 8)
-        self.occupation_embedding = nn.Embedding(occupation_count, 8)
+        self.user_embedding = Embedding(user_count, 32)
+        self.gender_embedding = Embedding(gender_count, 4)
+        self.age_embedding = Embedding(age_count, 8)
+        self.occupation_embedding = Embedding(occupation_count, 8)
 
         # 用户塔 MLP: 52 -> 128 -> 64 -> 64
-        self.user_tower = nn.Sequential(
-            nn.Linear(52, 128),
-            nn.ReLU(),
-            nn.Linear(128, 64),
-            nn.ReLU(),
-            nn.Linear(64, 64),
+        self.user_tower = Sequential(
+            Linear(52, 128),
+            ReLU(),
+            Linear(128, 64),
+            ReLU(),
+            Linear(64, 64),
         )
 
         # 物品塔输入：movie_id_emb 32维 + genres_emb 16维
-        self.movie_embedding = nn.Embedding(movie_count, 32)
-        self.genre_layer = nn.Linear(genre_count, 16)
+        self.movie_embedding = Embedding(movie_count, 32)
+        self.genre_layer = Linear(genre_count, 16)
 
         # 物品塔 MLP: 48 -> 128 -> 64 -> 64
-        self.movie_tower = nn.Sequential(
-            nn.Linear(48, 128),
-            nn.ReLU(),
-            nn.Linear(128, 64),
-            nn.ReLU(),
-            nn.Linear(64, 64),
+        self.movie_tower = Sequential(
+            Linear(48, 128),
+            ReLU(),
+            Linear(128, 64),
+            ReLU(),
+            Linear(64, 64),
         )
 
     def forward(
