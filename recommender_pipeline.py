@@ -1,4 +1,5 @@
 from pathlib import Path
+from time import perf_counter
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -75,6 +76,48 @@ class RecommenderPipeline:
         )
 
         return final_items
+
+    def recommend_with_timing(
+        self,
+        user_id,
+        top_k=20,
+        recall_size=300,
+        rough_rank_size=100,
+        fine_rank_size=50,
+    ):
+        timing = {"stages": {}}
+        total_start = perf_counter()
+
+        stage_start = perf_counter()
+        recalled_items = self.recall(user_id, recall_size)
+        record_stage_timing(timing, "recall", stage_start, recalled_items)
+
+        stage_start = perf_counter()
+        rough_ranked_items = self.rough_rank(
+            user_id=user_id,
+            candidates=recalled_items,
+            rough_rank_size=rough_rank_size,
+        )
+        record_stage_timing(timing, "rough_rank", stage_start, rough_ranked_items)
+
+        stage_start = perf_counter()
+        fine_ranked_items = self.fine_rank(
+            user_id=user_id,
+            candidates=rough_ranked_items,
+            fine_rank_size=fine_rank_size,
+        )
+        record_stage_timing(timing, "fine_rank", stage_start, fine_ranked_items)
+
+        stage_start = perf_counter()
+        final_items = self.rerank(
+            user_id=user_id,
+            ranked_items=fine_ranked_items,
+            top_k=top_k,
+        )
+        record_stage_timing(timing, "rerank", stage_start, final_items)
+
+        timing["total_ms"] = elapsed_ms(total_start)
+        return final_items, timing
 
 
 class Reranker:
@@ -171,6 +214,17 @@ def load_movie_genres(movies_path=MOVIES_PATH):
             movie_genres[int(movie_id)] = genres.split("|")
 
     return movie_genres
+
+
+def elapsed_ms(start_time):
+    return (perf_counter() - start_time) * 1000
+
+
+def record_stage_timing(timing, stage_name, start_time, items):
+    timing["stages"][stage_name] = {
+        "elapsed_ms": elapsed_ms(start_time),
+        "item_count": len(items),
+    }
 
 
 def build_recaller():

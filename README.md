@@ -163,6 +163,51 @@ python recommender_pipeline.py
 D:\Anaconda\envs\recommend\python.exe recommender_pipeline.py
 ```
 
+### 测试与端到端评估命令
+
+单元测试命令：
+
+```bash
+python -m unittest discover -s tests [参数]
+python -m tests.test_evaluate_pipeline [参数]
+python -m tests.test_pipeline_timing [参数]
+```
+
+常用示例：
+
+```bash
+python -m unittest discover -s tests
+python -m tests.test_evaluate_pipeline
+python -m tests.test_pipeline_timing
+```
+
+端到端 pipeline 评估命令：
+
+```bash
+python evaluate_pipeline.py [参数]
+D:\Anaconda\envs\recommend\python.exe evaluate_pipeline.py [参数]
+```
+
+常用参数：
+
+```text
+--ks 10,20              评估的 K 列表，默认是 10,20
+--max-users 1000        最多评估多少个用户，不传则评估全部测试用户
+--with-timing           输出推荐请求内时延和整条命令墙钟耗时
+--recall-size 300       双塔召回候选数量
+--rough-rank-size 100   粗排保留候选数量
+--fine-rank-size 50     精排保留候选数量
+```
+
+常用示例：
+
+```bash
+D:\Anaconda\envs\recommend\python.exe evaluate_pipeline.py --ks 10,20 --max-users 1000 --with-timing
+D:\Anaconda\envs\recommend\python.exe evaluate_pipeline.py --ks 5,10 --max-users 100 --recall-size 300 --rough-rank-size 100 --fine-rank-size 50 --with-timing
+```
+
+输出中的 `Latency timing` 表示模型已经加载后的单用户推荐平均耗时；`Command timing` 表示整条命令的墙钟耗时，包括模型初始化、评估循环和输出打印。
+
 ## 4. 召回模块
 
 召回模块位于：
@@ -510,8 +555,9 @@ pipeline.recommend(user_id=3)
 3. 精排 genres 特征预先转成 tensor
 4. pipeline 增加冷启动兜底
 5. 增加完整链路评估
-6. 接入 MySQL 数据源
-7. 增加 API 服务
+6. 增加显式交叉特征，例如用户历史 genre 偏好 × 当前电影 genre、用户画像 × 电影类型、recall_score × coarse_score
+7. 接入 MySQL 数据源
+8. 增加 API 服务
 ```
 
 其中优先级较高的是：
