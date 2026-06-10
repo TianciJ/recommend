@@ -22,7 +22,7 @@ MOVIES_PATH = TRAIN_DIR / "movies.dat"
 MODEL_DIR = BASE_DIR / "models" / "rough_rank"
 MODEL_PATH = MODEL_DIR / "three_tower.pt"
 
-DENSE_FEATURE_DIM = 4
+DENSE_FEATURE_DIM = 5  # user_avg_rating, user_count, movie_avg_rating, movie_count, recall_score
 
 
 def get_device():
@@ -165,7 +165,7 @@ def build_rating_stats(ratings_path=TRAIN_RATINGS_PATH, ratings=None):
     }
 
 
-def build_dense_features(user_id, movie_id, rating_stats):
+def build_dense_features(user_id, movie_id, rating_stats, recall_score=0.0):
     user_rating_sum = rating_stats["user_rating_sum"]
     user_rating_count = rating_stats["user_rating_count"]
     movie_rating_sum = rating_stats["movie_rating_sum"]
@@ -187,11 +187,15 @@ def build_dense_features(user_id, movie_id, rating_stats):
     user_count_feature = user_count / rating_stats["max_user_count"]
     movie_count_feature = movie_count / rating_stats["max_movie_count"]
 
+    # recall_score 来自双塔召回，值域约为 [-1, 1]，映射到 [0, 1]
+    recall_score_feature = (float(recall_score) + 1.0) / 2.0
+
     return [
         user_avg_rating / 5,
         user_count_feature,
         movie_avg_rating / 5,
         movie_count_feature,
+        recall_score_feature,
     ]
 
 
@@ -298,6 +302,8 @@ def load_samples(ratings_path, feature_info, skip_unknown=True, ratings=None):
                     user_id=user_id,
                     movie_id=movie_id,
                     rating_stats=rating_stats,
+                    # 训练时没有召回分数，用中性值 0.0（映射后为 0.5）占位
+                    recall_score=0.0,
                 ),
                 "label": label,
             }

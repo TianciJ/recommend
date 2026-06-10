@@ -67,6 +67,8 @@ class MMoERanker(nn.Module):
 
         # genres 是多标签特征，0 留给 padding，所以 genre_count 需要包含 padding 位置
         self.genre_embedding = nn.Embedding(genre_count, 16, padding_idx=0)
+        # genre attention：对每个 genre embedding 打一个标量权重，再加权求和
+        self.genre_attention = nn.Linear(16, 1)
 
         # 32 + 32 + 4 + 8 + 8 + 16 + recall_score 1 + coarse_score 1 = 102
         self.input_dim = 102
@@ -88,12 +90,17 @@ class MMoERanker(nn.Module):
 
     def pool_genres(self, genres):
         genre_vectors = self.genre_embedding(genres)
-        mask = (genres != 0).float().unsqueeze(-1)
+        mask = (genres != 0).float().unsqueeze(-1)  # [batch, max_genres, 1]
 
-        genre_sum = (genre_vectors * mask).sum(dim=1)
-        genre_count = mask.sum(dim=1).clamp(min=1)
+        # attention 打分：每个 genre embedding -> 标量权重
+        attention_scores = self.genre_attention(genre_vectors)  # [batch, max_genres, 1]
+        # padding 位置设为极小值，softmax 后权重趋近 0
+        attention_scores = attention_scores.masked_fill(mask == 0, -1e9)
+        attention_weights = torch.softmax(attention_scores, dim=1)  # [batch, max_genres, 1]
 
-        return genre_sum / genre_count
+        # 加权求和
+        genre_out = (genre_vectors * attention_weights * mask).sum(dim=1)  # [batch, 16]
+        return genre_out
 
     def build_input(
         self,

@@ -42,7 +42,7 @@ def build_model_from_checkpoint(checkpoint, device):
     return model
 
 
-def build_dense_features(user_id, movie_id, rating_stats):
+def build_dense_features(user_id, movie_id, rating_stats, recall_score=0.0):
     user_rating_sum = rating_stats["user_rating_sum"]
     user_rating_count = rating_stats["user_rating_count"]
     movie_rating_sum = rating_stats["movie_rating_sum"]
@@ -64,11 +64,15 @@ def build_dense_features(user_id, movie_id, rating_stats):
     user_count_feature = user_count / rating_stats["max_user_count"]
     movie_count_feature = movie_count / rating_stats["max_movie_count"]
 
+    # recall_score 来自双塔召回，值域约为 [-1, 1]，映射到 [0, 1]
+    recall_score_feature = (float(recall_score) + 1.0) / 2.0
+
     return [
         user_avg_rating / 5,
         user_count_feature,
         movie_avg_rating / 5,
         movie_count_feature,
+        recall_score_feature,
     ]
 
 
@@ -124,6 +128,7 @@ class RoughRanker:
                     user_id=user_id,
                     movie_id=movie_id,
                     rating_stats=rating_stats,
+                    recall_score=item.get("recall_score", 0.0),
                 )
             )
 

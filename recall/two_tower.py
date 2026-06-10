@@ -46,6 +46,7 @@ class RatingDataset(Dataset):
             ),
             "movie_index": torch.tensor(sample["movie_index"], dtype=torch.long),
             "genre_vector": torch.tensor(sample["genre_vector"], dtype=torch.float),
+            "user_behavior": torch.tensor(sample["user_behavior"], dtype=torch.float),
             "label": torch.tensor(sample["label"], dtype=torch.float),
         }
 
@@ -63,14 +64,15 @@ class TwoTowerModel(nn.Module):
         super().__init__()
 
         # 用户塔输入：user_id_emb 32维 + gender_emb 4维 + age_emb 8维 + occupation_emb 8维
+        #            + user_avg_rating 1维 + user_rating_count_log 1维 = 54维
         self.user_embedding = Embedding(user_count, 32)
         self.gender_embedding = Embedding(gender_count, 4)
         self.age_embedding = Embedding(age_count, 8)
         self.occupation_embedding = Embedding(occupation_count, 8)
 
-        # 用户塔 MLP: 52 -> 128 -> 64 -> 64
+        # 用户塔 MLP: 54 -> 128 -> 64 -> 64
         self.user_tower = Sequential(
-            Linear(52, 128),
+            Linear(54, 128),
             ReLU(),
             Linear(128, 64),
             ReLU(),
@@ -98,14 +100,17 @@ class TwoTowerModel(nn.Module):
         occupation_index,
         movie_index,
         genre_vector,
+        user_behavior,
     ):
         user_id_vector = self.user_embedding(user_index)
         gender_vector = self.gender_embedding(gender_index)
         age_vector = self.age_embedding(age_index)
         occupation_vector = self.occupation_embedding(occupation_index)
 
+        # user_behavior: [batch, 2]，包含 user_avg_rating/5 和 log1p(count)/log1p(max_count)
         user_input = torch.cat(
-            [user_id_vector, gender_vector, age_vector, occupation_vector], dim=1
+            [user_id_vector, gender_vector, age_vector, occupation_vector, user_behavior],
+            dim=1,
         )
         user_vector = self.user_tower(user_input)
 
@@ -119,7 +124,9 @@ class TwoTowerModel(nn.Module):
         return score
 
 
-def load_user_features(users_path=USERS_PATH, users=None):
+def load_user_features(users_path=USERS_PATH, users=None, ratings=None):
+    import math
+
     user_features = {}
     gender_to_index = {}
     age_to_index = {}
@@ -147,7 +154,31 @@ def load_user_features(users_path=USERS_PATH, users=None):
             "gender_index": gender_to_index[gender],
             "age_index": age_to_index[age],
             "occupation_index": occupation_to_index[occupation],
+            # 行为特征先初始化为默认值，后面从 ratings 更新
+            "avg_rating": 3.0,
+            "rating_count": 0,
         }
+
+    # 从 ratings 统计用户行为特征
+    if ratings is not None:
+        user_rating_sum = {}
+        user_rating_count = {}
+
+        for row in ratings:
+            uid = int(row["user_id"])
+            user_rating_sum[uid] = user_rating_sum.get(uid, 0) + int(row["rating"])
+            user_rating_count[uid] = user_rating_count.get(uid, 0) + 1
+
+        max_count = max(user_rating_count.values()) if user_rating_count else 1
+
+        for uid, count in user_rating_count.items():
+            if uid in user_features:
+                user_features[uid]["avg_rating"] = user_rating_sum[uid] / count
+                user_features[uid]["rating_count"] = count
+
+        # 将 max_count 存到每条记录，推理时归一化用
+        for uid in user_features:
+            user_features[uid]["max_rating_count"] = max_count
 
     return user_features, gender_to_index, age_to_index, occupation_to_index
 
@@ -257,10 +288,15 @@ def load_train_samples(ratings_path=TRAIN_RATINGS_PATH, ratings=None, users=None
     movie_id_to_index = {}
     index_to_movie_id = {}
 
+    import math
+
     user_features, gender_to_index, age_to_index, occupation_to_index = (
-        load_user_features(users=users)
+        load_user_features(users=users, ratings=ratings)
     )
     movie_features, genre_to_index = load_movie_features(movies=movies)
+
+    # max_rating_count 用于推理时归一化，从任意一个用户特征里取
+    max_rating_count = next(iter(user_features.values()), {}).get("max_rating_count", 1) or 1
 
     for rating_row in ratings:
         user_id = int(rating_row["user_id"])
@@ -286,6 +322,10 @@ def load_train_samples(ratings_path=TRAIN_RATINGS_PATH, ratings=None, users=None
         user_feature = user_features[user_id]
         movie_feature = movie_features[movie_id]
 
+        # 用户行为特征：归一化平均评分 + log 归一化评分数
+        avg_rating_norm = user_feature["avg_rating"] / 5.0
+        count_norm = math.log1p(user_feature["rating_count"]) / math.log1p(max_rating_count)
+
         samples.append(
             {
                 "user_index": user_id_to_index[user_id],
@@ -294,6 +334,7 @@ def load_train_samples(ratings_path=TRAIN_RATINGS_PATH, ratings=None, users=None
                 "occupation_index": user_feature["occupation_index"],
                 "movie_index": movie_id_to_index[movie_id],
                 "genre_vector": movie_feature["genre_vector"],
+                "user_behavior": [avg_rating_norm, count_norm],
                 "label": label,
             }
         )
@@ -308,6 +349,7 @@ def load_train_samples(ratings_path=TRAIN_RATINGS_PATH, ratings=None, users=None
         "age_count": len(age_to_index),
         "occupation_count": len(occupation_to_index),
         "genre_count": len(genre_to_index),
+        "max_rating_count": max_rating_count,
     }
 
     return samples, feature_info
@@ -360,6 +402,7 @@ def train_model(epochs=3, batch_size=1024, learning_rate=0.001):
                 batch["occupation_index"],
                 batch["movie_index"],
                 batch["genre_vector"],
+                batch["user_behavior"],
             )
             loss = loss_fn(score, batch["label"])
 
@@ -463,6 +506,17 @@ class TwoTowerRecaller:
                 genre_vectors, dtype=torch.float, device=self.device
             )
 
+            # 用户行为特征：广播到所有电影
+            import math
+            max_rating_count = self.feature_info.get("max_rating_count", 1) or 1
+            avg_rating_norm = user_feature["avg_rating"] / 5.0
+            count_norm = math.log1p(user_feature["rating_count"]) / math.log1p(max_rating_count)
+            user_behavior_tensor = torch.tensor(
+                [[avg_rating_norm, count_norm]] * movie_count,
+                dtype=torch.float,
+                device=self.device,
+            )
+
             scores = self.model(
                 user_tensor,
                 gender_tensor,
@@ -470,6 +524,7 @@ class TwoTowerRecaller:
                 occupation_tensor,
                 movie_tensor,
                 genre_tensor,
+                user_behavior_tensor,
             )
             top_scores, top_movie_indexes = torch.topk(scores, top_k)
             top_scores = top_scores.cpu()
@@ -538,6 +593,16 @@ def recommend_for_user(user_id, top_k=10):
             genre_vectors.append(movie_features[movie_id]["genre_vector"])
         genre_tensor = torch.tensor(genre_vectors, dtype=torch.float, device=device)
 
+        import math
+        max_rating_count = feature_info.get("max_rating_count", 1) or 1
+        avg_rating_norm = user_feature["avg_rating"] / 5.0
+        count_norm = math.log1p(user_feature["rating_count"]) / math.log1p(max_rating_count)
+        user_behavior_tensor = torch.tensor(
+            [[avg_rating_norm, count_norm]] * movie_count,
+            dtype=torch.float,
+            device=device,
+        )
+
         scores = model(
             user_tensor,
             gender_tensor,
@@ -545,6 +610,7 @@ def recommend_for_user(user_id, top_k=10):
             occupation_tensor,
             movie_tensor,
             genre_tensor,
+            user_behavior_tensor,
         )
         top_scores, top_movie_indexes = torch.topk(scores, top_k)
         top_scores = top_scores.cpu()
