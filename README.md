@@ -33,30 +33,29 @@ recommend/
     evaluate.py                 # 召回模型评估
     movie_utils.py              # 电影标题等辅助工具
 
-  model_weights/                # 双塔召回模型权重
-    two_tower.pt
-    model_epoch_*.pt
-
   rough_rank/                   # 粗排模块代码
-    rough_rank_three_tower.py   # 三塔粗排模型结构
-    train_rough_rank.py         # 三塔粗排训练脚本
-    rough_rank_inference.py     # 三塔粗排推理
-
-  rough_rank_model/             # 粗排模型权重
-    rough_rank_three_tower.pt
-    rough_rank_epoch_*.pt
+    model.py                    # 三塔粗排模型结构
+    train.py                    # 三塔粗排训练脚本
+    inference.py                # 三塔粗排推理
 
   fine_rank/                    # 精排模块代码
-    mmoe_ranker.py              # MMoE 精排模型结构
-    train_mmoe_ranker.py        # MMoE 精排训练脚本
-    mmoe_inference.py           # MMoE 精排推理
+    model.py                    # MMoE 精排模型结构
+    train.py                    # MMoE 精排训练脚本
+    inference.py                # MMoE 精排推理
 
   cold_start/                   # 新用户冷启动模块
     cold_start_recommender.py    # 基于 age + occupation 的画像分群冷启动
 
-  fine_rank_model/              # 精排模型权重
-    mmoe_ranker.pt
-    mmoe_epoch_*.pt
+  models/                       # 所有模型权重
+    recall/                     # 双塔召回模型权重
+      two_tower.pt
+      two_tower_epoch_*.pt
+    rough_rank/                 # 三塔粗排模型权重
+      three_tower.pt
+      three_tower_epoch_*.pt
+    fine_rank/                  # MMoE 精排模型权重
+      mmoe.pt
+      mmoe_epoch_*.pt
 
   recommender_pipeline.py       # 推荐系统主链路入口
   structure.md                  # 项目设计和结构说明
@@ -296,7 +295,7 @@ rough_rank/
 模型文件：
 
 ```text
-rough_rank/rough_rank_three_tower.py
+rough_rank/model.py
 ```
 
 当前使用三塔粗排模型：
@@ -328,19 +327,19 @@ user_vector + movie_vector + dense_vector -> rough_rank_score
 ### 训练粗排模型
 
 ```bash
-python -m rough_rank.train_rough_rank --epochs 3
+python -m rough_rank.train --epochs 3
 ```
 
 也可以调大 batch：
 
 ```bash
-python -m rough_rank.train_rough_rank --epochs 3 --batch-size 4096
+python -m rough_rank.train --epochs 3 --batch-size 4096
 ```
 
 训练后的模型保存在：
 
 ```text
-rough_rank_model/
+models/rough_rank/
 ```
 
 ### 粗排推理
@@ -348,7 +347,7 @@ rough_rank_model/
 推理类：
 
 ```python
-from rough_rank.rough_rank_inference import RoughRanker
+from rough_rank.inference import RoughRanker
 
 ranker = RoughRanker()
 rough_ranked_items = ranker.rank(
@@ -371,7 +370,7 @@ fine_rank/
 模型文件：
 
 ```text
-fine_rank/mmoe_ranker.py
+fine_rank/model.py
 ```
 
 当前使用 MMoE 多目标精排模型。
@@ -429,7 +428,7 @@ total_loss =
 ### 训练精排模型
 
 ```bash
-python -m fine_rank.train_mmoe_ranker --epochs 3
+python -m fine_rank.train --epochs 3
 ```
 
 训练时会先使用已有模型生成：
@@ -444,13 +443,13 @@ coarse_score
 精排模型保存在：
 
 ```text
-fine_rank_model/
+models/fine_rank/
 ```
 
 pipeline 当前默认加载：
 
 ```text
-fine_rank_model/mmoe_epoch_6.pt
+models/fine_rank/mmoe_epoch_6.pt
 ```
 
 并使用 `like` 任务分数作为精排分：
@@ -528,8 +527,8 @@ pipeline 最终返回的是一个列表，每个元素大致包含：
 ```bash
 python -m recall.two_tower --mode train --epochs 3
 python -m recall.evaluate
-python -m rough_rank.train_rough_rank --epochs 3
-python -m fine_rank.train_mmoe_ranker --epochs 3
+python -m rough_rank.train --epochs 3
+python -m fine_rank.train --epochs 3
 python recommender_pipeline.py
 ```
 

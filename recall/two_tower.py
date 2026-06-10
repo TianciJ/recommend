@@ -16,7 +16,7 @@ TRAIN_DIR = BASE_DIR / "train_data"
 TRAIN_RATINGS_PATH = TRAIN_DIR / "ratings.dat"
 USERS_PATH = TRAIN_DIR / "users.dat"
 MOVIES_PATH = TRAIN_DIR / "movies.dat"
-MODEL_DIR = BASE_DIR / "model_weights"
+MODEL_DIR = BASE_DIR / "models" / "recall"
 MODEL_PATH = MODEL_DIR / "two_tower.pt"
 
 
@@ -372,7 +372,7 @@ def train_model(epochs=3, batch_size=1024, learning_rate=0.001):
         average_loss = total_loss / len(dataloader)
         print(f"epoch={epoch + 1}, loss={average_loss:.4f}")
 
-        epoch_model_path = MODEL_DIR / f"model_epoch_{epoch + 1}.pt"
+        epoch_model_path = MODEL_DIR / f"two_tower_epoch_{epoch + 1}.pt"
         torch.save(
             {
                 "model_state_dict": model.state_dict(),

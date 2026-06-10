@@ -412,14 +412,14 @@ def build_recaller():
 
 def build_rough_ranker():
     # 延迟导入，避免没有 torch 的环境在导入 pipeline 时直接报错
-    from rough_rank.rough_rank_inference import RoughRanker
+    from rough_rank.inference import RoughRanker
 
     return RoughRanker()
 
 
 def build_fine_ranker():
     # 延迟导入，避免没有 torch 的环境在导入 pipeline 时直接报错
-    from fine_rank.mmoe_inference import MMoEFineRanker
+    from fine_rank.inference import MMoEFineRanker
 
     return MMoEFineRanker()
 

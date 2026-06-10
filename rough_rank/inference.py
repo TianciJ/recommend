@@ -2,11 +2,11 @@ from pathlib import Path
 
 import torch
 
-from .rough_rank_three_tower import ThreeTowerRoughRankModel
+from .model import ThreeTowerRoughRankModel
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-ROUGH_RANK_MODEL_DIR = BASE_DIR / "rough_rank_model"
-MODEL_PATH = ROUGH_RANK_MODEL_DIR / "rough_rank_three_tower.pt"
+MODEL_DIR = BASE_DIR / "models" / "rough_rank"
+MODEL_PATH = MODEL_DIR / "three_tower.pt"
 
 
 def get_device():

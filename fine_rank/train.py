@@ -5,18 +5,18 @@ import torch
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset
 
-from .mmoe_ranker import MMoERanker
-from .mmoe_ranker import evaluate
-from .mmoe_ranker import get_device
-from .mmoe_ranker import train_one_epoch
+from .model import MMoERanker
+from .model import evaluate
+from .model import get_device
+from .model import train_one_epoch
 
 from recall.two_tower import build_model_from_checkpoint as build_recall_model
 from recall.two_tower import load_movies_from_dat
 from recall.two_tower import load_mysql_dataset_if_configured
 from recall.two_tower import load_ratings_from_dat
 from recall.two_tower import load_users_from_dat
-from rough_rank.rough_rank_inference import build_dense_features
-from rough_rank.rough_rank_inference import build_model_from_checkpoint as build_rough_model
+from rough_rank.inference import build_dense_features
+from rough_rank.inference import build_model_from_checkpoint as build_rough_model
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -27,10 +27,10 @@ TEST_RATINGS_PATH = TEST_DIR / "ratings.dat"
 USERS_PATH = TRAIN_DIR / "users.dat"
 MOVIES_PATH = TRAIN_DIR / "movies.dat"
 
-RECALL_MODEL_PATH = BASE_DIR / "model_weights" / "two_tower.pt"
-ROUGH_MODEL_PATH = BASE_DIR / "rough_rank_model" / "rough_rank_three_tower.pt"
-FINE_RANK_MODEL_DIR = BASE_DIR / "fine_rank_model"
-FINE_RANK_MODEL_PATH = FINE_RANK_MODEL_DIR / "mmoe_ranker.pt"
+RECALL_MODEL_PATH = BASE_DIR / "models" / "recall" / "two_tower.pt"
+ROUGH_MODEL_PATH = BASE_DIR / "models" / "rough_rank" / "three_tower.pt"
+FINE_RANK_MODEL_DIR = BASE_DIR / "models" / "fine_rank"
+FINE_RANK_MODEL_PATH = FINE_RANK_MODEL_DIR / "mmoe.pt"
 
 
 class MMoEDataset(Dataset):

@@ -11,7 +11,7 @@ from .two_tower import get_device
 BASE_DIR = Path(__file__).resolve().parent.parent
 TRAIN_RATINGS_PATH = BASE_DIR / "train_data" / "ratings.dat"
 TEST_RATINGS_PATH = BASE_DIR / "test_data" / "ratings.dat"
-MODEL_DIR = BASE_DIR / "model_weights"
+MODEL_DIR = BASE_DIR / "models" / "recall"
 FINAL_MODEL_PATH = MODEL_DIR / "two_tower.pt"
 
 
@@ -22,7 +22,7 @@ def load_checkpoint(model_path, device):
 def find_model_paths(model_dir=MODEL_DIR):
     model_paths = []
 
-    for model_path in model_dir.glob("model_epoch_*.pt"):
+    for model_path in model_dir.glob("two_tower_epoch_*.pt"):
         model_paths.append(model_path)
 
     if FINAL_MODEL_PATH.exists():
@@ -32,7 +32,7 @@ def find_model_paths(model_dir=MODEL_DIR):
 
 
 def model_sort_key(model_path):
-    match = re.search(r"model_epoch_(\d+)\.pt$", model_path.name)
+    match = re.search(r"two_tower_epoch_(\d+)\.pt$", model_path.name)
 
     if match:
         return (0, int(match.group(1)))

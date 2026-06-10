@@ -6,22 +6,21 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset
 
-from .rough_rank_three_tower import ThreeTowerRoughRankModel
+from .model import ThreeTowerRoughRankModel
 from recall.two_tower import load_movies_from_dat
 from recall.two_tower import load_mysql_dataset_if_configured
 from recall.two_tower import load_ratings_from_dat
 from recall.two_tower import load_users_from_dat
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-ROUGH_RANK_MODEL_DIR = BASE_DIR / "rough_rank_model"
 TRAIN_DIR = BASE_DIR / "train_data"
 TEST_DIR = BASE_DIR / "test_data"
 TRAIN_RATINGS_PATH = TRAIN_DIR / "ratings.dat"
 TEST_RATINGS_PATH = TEST_DIR / "ratings.dat"
 USERS_PATH = TRAIN_DIR / "users.dat"
 MOVIES_PATH = TRAIN_DIR / "movies.dat"
-MODEL_DIR = ROUGH_RANK_MODEL_DIR
-MODEL_PATH = MODEL_DIR / "rough_rank_three_tower.pt"
+MODEL_DIR = BASE_DIR / "models" / "rough_rank"
+MODEL_PATH = MODEL_DIR / "three_tower.pt"
 
 DENSE_FEATURE_DIM = 4
 
@@ -419,7 +418,7 @@ def train_model(epochs=3, batch_size=1024, learning_rate=0.001):
             f"test_accuracy={test_accuracy:.4f}"
         )
 
-        epoch_model_path = MODEL_DIR / f"rough_rank_epoch_{epoch + 1}.pt"
+        epoch_model_path = MODEL_DIR / f"three_tower_epoch_{epoch + 1}.pt"
         torch.save(
             {
                 "model_state_dict": model.state_dict(),
