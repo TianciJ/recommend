@@ -179,10 +179,7 @@ class ColdStartRecommender:
 
 
 def normalize_profile_value(value):
-    if value is None:
-        return None
-
-    return str(value)
+    return str(value) if value is not None else None
 
 
 def load_user_profiles(users_path):
@@ -251,10 +248,7 @@ def normalize_movie_info(movies):
 
 
 def get_primary_genre(genres):
-    if not genres:
-        return "Unknown"
-
-    return genres[0]
+    return genres[0] if genres else "Unknown"
 
 
 def diversify_by_primary_genre(ranked_items, top_k):

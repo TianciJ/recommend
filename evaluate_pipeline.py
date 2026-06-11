@@ -199,10 +199,7 @@ def build_command_timing_summary(
     command_total_ms,
     evaluated_users,
 ):
-    if evaluated_users > 0:
-        avg_command_ms_per_user = command_total_ms / evaluated_users
-    else:
-        avg_command_ms_per_user = 0
+    avg_command_ms_per_user = command_total_ms / evaluated_users if evaluated_users > 0 else 0
 
     return {
         "pipeline_init_ms": pipeline_init_ms,

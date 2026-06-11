@@ -13,7 +13,7 @@ class MysqlConfig:
 
 
 def get_mysql_config_from_env(env=None):
-    env = env if env is not None else os.environ
+    env = env or os.environ
 
     user = env.get("MYSQL_USER")
     password = env.get("MYSQL_PASSWORD")
