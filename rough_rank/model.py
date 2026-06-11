@@ -1,3 +1,5 @@
+# 三塔粗排模型
+# 用户塔 + 物品塔 + Dense 统计特征塔，三路各输出 64 维，拼接后经 MLP 输出单个粗排分数
 import torch
 import torch.nn as nn
 
@@ -11,52 +13,42 @@ class ThreeTowerRoughRankModel(nn.Module):
         age_count,
         occupation_count,
         genre_count,
-        dense_feature_dim,
+        dense_feature_dim,  # Dense 塔的输入维度，目前为 5
     ):
         super().__init__()
 
-        # 用户塔输入：user_id_emb 32维 + gender_emb 4维 + age_emb 8维 + occupation_emb 8维
+        # --- 用户塔 ---
+        # 输入: user_id(32) + gender(4) + age(8) + occupation(8) = 52 维
         self.user_embedding = nn.Embedding(user_count, 32)
         self.gender_embedding = nn.Embedding(gender_count, 4)
         self.age_embedding = nn.Embedding(age_count, 8)
         self.occupation_embedding = nn.Embedding(occupation_count, 8)
-
-        # 用户塔 MLP: 52 -> 128 -> 64
         self.user_tower = nn.Sequential(
-            nn.Linear(52, 128),
-            nn.ReLU(),
-            nn.Linear(128, 64),
-            nn.ReLU(),
+            nn.Linear(52, 128), nn.ReLU(),
+            nn.Linear(128, 64), nn.ReLU(),
         )
 
-        # 物品塔输入：movie_id_emb 32维 + genres_emb 16维
+        # --- 物品塔 ---
+        # 输入: movie_id(32) + genre one-hot -> 16 维 = 48 维
         self.movie_embedding = nn.Embedding(movie_count, 32)
         self.genre_layer = nn.Linear(genre_count, 16)
-
-        # 物品塔 MLP: 48 -> 128 -> 64
         self.movie_tower = nn.Sequential(
-            nn.Linear(48, 128),
-            nn.ReLU(),
-            nn.Linear(128, 64),
-            nn.ReLU(),
+            nn.Linear(48, 128), nn.ReLU(),
+            nn.Linear(128, 64), nn.ReLU(),
         )
 
-        # 第三塔：放粗排常用的连续特征
-        # 例如 recall_score、movie_avg_rating、movie_rating_count、user_avg_rating 等
+        # --- Dense 特征塔 ---
+        # 输入: user_avg_rating, user_count, movie_avg_rating, movie_count, recall_score
         self.dense_tower = nn.Sequential(
-            nn.Linear(dense_feature_dim, 64),
-            nn.ReLU(),
-            nn.Linear(64, 64),
-            nn.ReLU(),
+            nn.Linear(dense_feature_dim, 64), nn.ReLU(),
+            nn.Linear(64, 64), nn.ReLU(),
         )
 
-        # 三个塔各输出 64 维，拼接后是 192 维
-        # 最后输出一个粗排分数
+        # --- 融合层 ---
+        # 三塔拼接后 192 维，输出单个粗排分数
         self.output_layer = nn.Sequential(
-            nn.Linear(192, 128),
-            nn.ReLU(),
-            nn.Linear(128, 64),
-            nn.ReLU(),
+            nn.Linear(192, 128), nn.ReLU(),
+            nn.Linear(128, 64), nn.ReLU(),
             nn.Linear(64, 1),
         )
 
@@ -70,24 +62,26 @@ class ThreeTowerRoughRankModel(nn.Module):
         genre_vector,
         dense_features,
     ):
-        user_id_vector = self.user_embedding(user_index)
-        gender_vector = self.gender_embedding(gender_index)
-        age_vector = self.age_embedding(age_index)
-        occupation_vector = self.occupation_embedding(occupation_index)
-
-        user_input = torch.cat(
-            [user_id_vector, gender_vector, age_vector, occupation_vector], dim=1
-        )
+        # 用户塔前向
+        user_input = torch.cat([
+            self.user_embedding(user_index),
+            self.gender_embedding(gender_index),
+            self.age_embedding(age_index),
+            self.occupation_embedding(occupation_index),
+        ], dim=1)
         user_vector = self.user_tower(user_input)
 
-        movie_id_vector = self.movie_embedding(movie_index)
-        genre_feature_vector = self.genre_layer(genre_vector)
-
-        movie_input = torch.cat([movie_id_vector, genre_feature_vector], dim=1)
+        # 物品塔前向
+        movie_input = torch.cat([
+            self.movie_embedding(movie_index),
+            self.genre_layer(genre_vector),
+        ], dim=1)
         movie_vector = self.movie_tower(movie_input)
 
+        # Dense 塔前向
         dense_vector = self.dense_tower(dense_features)
 
+        # 拼接三塔输出，输出粗排分数
         final_input = torch.cat([user_vector, movie_vector, dense_vector], dim=1)
         score = self.output_layer(final_input)
 

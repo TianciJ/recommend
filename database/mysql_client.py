@@ -1,3 +1,7 @@
+# MySQL 连接工具
+# 从环境变量读取连接配置，返回 pymysql 连接对象
+# 需要设置的环境变量：MYSQL_USER、MYSQL_PASSWORD（必填），
+#                    MYSQL_HOST、MYSQL_PORT、MYSQL_DATABASE（可选，有默认值）
 import os
 from dataclasses import dataclass
 
@@ -13,6 +17,7 @@ class MysqlConfig:
 
 
 def get_mysql_config_from_env(env=None):
+    # 读取环境变量；user 和 password 缺一不可，否则返回 None 表示未配置
     env = env or os.environ
 
     user = env.get("MYSQL_USER")
@@ -32,6 +37,7 @@ def get_mysql_config_from_env(env=None):
 
 
 def create_mysql_connection(config=None):
+    # 若未传入 config，自动从环境变量读取；pymysql 未安装时给出友好提示
     config = config or get_mysql_config_from_env()
 
     if config is None:
@@ -50,6 +56,6 @@ def create_mysql_connection(config=None):
         database=config.database,
         connect_timeout=config.connect_timeout,
         charset="utf8mb4",
-        cursorclass=pymysql.cursors.DictCursor,
+        cursorclass=pymysql.cursors.DictCursor,  # 查询结果以字典形式返回，方便按列名访问
         autocommit=True,
     )

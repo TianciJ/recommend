@@ -1,3 +1,6 @@
+# 双塔召回模型
+# 用户塔和物品塔各自输出 64 维向量，用余弦相似度作为召回分数
+# 训练时以 rating >= 4 为正样本，rating <= 2 为负样本，rating == 3 跳过
 import argparse
 import math
 from pathlib import Path
@@ -23,7 +26,10 @@ def get_device():
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
+# ---------- 训练数据集 ----------
+
 class RatingDataset(Dataset):
+    # 把样本列表包装成 PyTorch Dataset，供 DataLoader 使用
     def __init__(self, samples):
         self.samples = samples
 
@@ -44,37 +50,48 @@ class RatingDataset(Dataset):
         }
 
 
+# ---------- 模型结构 ----------
+
 class TwoTowerModel(nn.Module):
-    # 用户塔: user_id(32) + gender(4) + age(8) + occupation(8) + behavior(2) = 54
-    # 物品塔: movie_id(32) + genre(16) = 48
+    # 用户塔: user_id(32) + gender(4) + age(8) + occupation(8) + behavior(2) = 54 维
+    # 物品塔: movie_id(32) + genre(16) = 48 维
+    # 两塔各经过 MLP 压缩到 64 维，最终用余弦相似度打分
     def __init__(self, user_count, movie_count, gender_count, age_count, occupation_count, genre_count):
         super().__init__()
+        # 用户侧 embedding
         self.user_embedding = Embedding(user_count, 32)
         self.gender_embedding = Embedding(gender_count, 4)
         self.age_embedding = Embedding(age_count, 8)
         self.occupation_embedding = Embedding(occupation_count, 8)
         self.user_tower = Sequential(Linear(54, 128), ReLU(), Linear(128, 64), ReLU(), Linear(64, 64))
 
+        # 物品侧 embedding
         self.movie_embedding = Embedding(movie_count, 32)
-        self.genre_layer = Linear(genre_count, 16)
+        self.genre_layer = Linear(genre_count, 16)  # genre one-hot -> 16 维稠密表示
         self.movie_tower = Sequential(Linear(48, 128), ReLU(), Linear(128, 64), ReLU(), Linear(64, 64))
 
     def forward(self, user_index, gender_index, age_index, occupation_index, movie_index, genre_vector, user_behavior):
+        # 拼接用户侧所有特征，过用户塔
         user_input = torch.cat([
             self.user_embedding(user_index),
             self.gender_embedding(gender_index),
             self.age_embedding(age_index),
             self.occupation_embedding(occupation_index),
-            user_behavior,
+            user_behavior,  # [avg_rating/5, log_count_norm]
         ], dim=1)
+        # 拼接物品侧特征，过物品塔
         movie_input = torch.cat([
             self.movie_embedding(movie_index),
             self.genre_layer(genre_vector),
         ], dim=1)
+        # 余弦相似度作为最终分数，范围 [-1, 1]
         return F.cosine_similarity(self.user_tower(user_input), self.movie_tower(movie_input), dim=1)
 
 
+# ---------- 特征加载 ----------
+
 def load_user_features(users_path=USERS_PATH, users=None, ratings=None):
+    # 构建用户特征字典，同时统计行为特征（平均评分、评分数量）
     if users is None:
         users = load_users_from_dat(users_path)
 
@@ -85,6 +102,7 @@ def load_user_features(users_path=USERS_PATH, users=None, ratings=None):
         uid = int(user["user_id"])
         gender, age, occ = str(user["gender"]), str(user["age"]), str(user["occupation"])
 
+        # 遇到新值时动态分配索引（label encoding）
         if gender not in gender_to_index:
             gender_to_index[gender] = len(gender_to_index)
         if age not in age_to_index:
@@ -96,10 +114,11 @@ def load_user_features(users_path=USERS_PATH, users=None, ratings=None):
             "gender_index": gender_to_index[gender],
             "age_index": age_to_index[age],
             "occupation_index": occupation_to_index[occ],
-            "avg_rating": 3.0,
+            "avg_rating": 3.0,   # 默认均值，有 ratings 时会覆盖
             "rating_count": 0,
         }
 
+    # 用 ratings 数据更新每个用户的行为统计
     if ratings is not None:
         rating_sum, rating_count = {}, {}
         for row in ratings:
@@ -112,6 +131,7 @@ def load_user_features(users_path=USERS_PATH, users=None, ratings=None):
             if uid in user_features:
                 user_features[uid]["avg_rating"] = rating_sum[uid] / count
                 user_features[uid]["rating_count"] = count
+        # max_rating_count 存到每条记录，推理时归一化用
         for uid in user_features:
             user_features[uid]["max_rating_count"] = max_count
 
@@ -128,6 +148,7 @@ def load_users_from_dat(users_path=USERS_PATH):
 
 
 def load_movie_features(movies_path=MOVIES_PATH, movies=None):
+    # 构建电影 genre one-hot 特征：每部电影对应一个 genre_count 维的 0/1 向量
     if movies is None:
         movies = load_movies_from_dat(movies_path)
 
@@ -171,6 +192,7 @@ def load_ratings_from_dat(ratings_path=TRAIN_RATINGS_PATH):
 
 
 def load_train_samples(ratings_path=TRAIN_RATINGS_PATH, ratings=None, users=None, movies=None):
+    # 优先从 MySQL 读数据，无配置时回退到 .dat 文件
     if ratings is None and users is None and movies is None:
         mysql_dataset = load_mysql_dataset_if_configured(split="train")
         if mysql_dataset is not None:
@@ -189,8 +211,9 @@ def load_train_samples(ratings_path=TRAIN_RATINGS_PATH, ratings=None, users=None
     for row in ratings:
         uid, mid, rating = int(row["user_id"]), int(row["movie_id"]), int(row["rating"])
         if rating == 3:
-            continue
+            continue  # 跳过中立评分，避免引入噪声
 
+        # 动态建立 id -> 连续整数索引的映射（Embedding 层需要连续索引）
         if uid not in user_id_to_index:
             user_id_to_index[uid] = len(user_id_to_index)
         if mid not in movie_id_to_index:
@@ -199,6 +222,7 @@ def load_train_samples(ratings_path=TRAIN_RATINGS_PATH, ratings=None, users=None
             index_to_movie_id[movie_idx] = mid
 
         uf = user_features[uid]
+        # 行为特征归一化：avg_rating 除以 5，rating_count 做 log 压缩后归一化
         avg_rating_norm = uf["avg_rating"] / 5.0
         count_norm = math.log1p(uf["rating_count"]) / math.log1p(max_rating_count)
 
@@ -213,6 +237,7 @@ def load_train_samples(ratings_path=TRAIN_RATINGS_PATH, ratings=None, users=None
             "label": 1 if rating >= 4 else 0,
         })
 
+    # feature_info 随模型权重一起保存，推理时复用相同的索引映射和特征统计
     feature_info = {
         "user_id_to_index": user_id_to_index,
         "movie_id_to_index": movie_id_to_index,
@@ -238,6 +263,7 @@ def move_batch_to_device(batch, device):
 
 
 def build_model_from_checkpoint(checkpoint, device):
+    # 从 checkpoint 中读取 feature_info，用于确定各 Embedding 层的大小
     fi = checkpoint["feature_info"]
     model = TwoTowerModel(
         user_count=len(fi["user_id_to_index"]),
@@ -252,11 +278,14 @@ def build_model_from_checkpoint(checkpoint, device):
     return model
 
 
+# ---------- 推理工具 ----------
+
 def _build_user_tensors(user_feature, movie_count, feature_info, device):
-    """推理时为一个用户广播出 movie_count 份用户侧张量。"""
+    """推理时为一个用户广播出 movie_count 份用户侧张量，对所有电影统一打分。"""
     max_count = feature_info.get("max_rating_count", 1) or 1
     avg_norm = user_feature["avg_rating"] / 5.0
     count_norm = math.log1p(user_feature["rating_count"]) / math.log1p(max_count)
+    # repeat 将标量值复制 movie_count 份，生成对应的 1D tensor
     repeat = lambda val, dtype: torch.tensor([val] * movie_count, dtype=dtype, device=device)
     return (
         repeat(user_feature["_index"], torch.long),
@@ -268,6 +297,8 @@ def _build_user_tensors(user_feature, movie_count, feature_info, device):
 
 
 class TwoTowerRecaller:
+    """加载训练好的双塔模型，对单个用户批量计算所有电影的召回分数，返回 top_k。"""
+
     def __init__(self, model_path=MODEL_PATH):
         self.device = get_device()
         self.checkpoint = torch.load(model_path, map_location=self.device)
@@ -280,12 +311,14 @@ class TwoTowerRecaller:
             print("这个用户没有出现在训练集中，暂时无法用双塔召回")
             return []
 
+        # 把用户索引附加到 feature dict 上，供 _build_user_tensors 使用
         user_feature = {**fi["user_features"][user_id], "_index": fi["user_id_to_index"][user_id]}
         movie_count = len(fi["index_to_movie_id"])
 
         with torch.no_grad():
             u, g, a, o, beh = _build_user_tensors(user_feature, movie_count, fi, self.device)
             movie_tensor = torch.arange(movie_count, dtype=torch.long, device=self.device)
+            # 预取所有电影的 genre 向量，拼成矩阵一次性过物品塔
             genre_tensor = torch.tensor(
                 [fi["movie_features"][fi["index_to_movie_id"][i]]["genre_vector"] for i in range(movie_count)],
                 dtype=torch.float, device=self.device,
@@ -301,6 +334,7 @@ class TwoTowerRecaller:
 
 
 def recommend_for_user(user_id, top_k=10):
+    # 命令行单次推理入口（每次都重新加载模型，批量使用请用 TwoTowerRecaller 类）
     device = get_device()
     checkpoint = torch.load(MODEL_PATH, map_location=device)
     fi = checkpoint["feature_info"]
@@ -330,6 +364,8 @@ def recommend_for_user(user_id, top_k=10):
     return add_movie_titles(recommendations)
 
 
+# ---------- 训练 ----------
+
 def train_model(epochs=3, batch_size=1024, learning_rate=0.001):
     samples, feature_info = load_train_samples()
     device = get_device()
@@ -345,6 +381,7 @@ def train_model(epochs=3, batch_size=1024, learning_rate=0.001):
         genre_count=feature_info["genre_count"],
     ).to(device)
 
+    # BCE 损失：把余弦相似度当作二分类 logit（喜欢/不喜欢）
     loss_fn = nn.BCEWithLogitsLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     MODEL_DIR.mkdir(exist_ok=True)
@@ -357,14 +394,17 @@ def train_model(epochs=3, batch_size=1024, learning_rate=0.001):
         avg_loss = total_loss / len(dataloader)
         print(f"epoch={epoch + 1}, loss={avg_loss:.4f}")
 
+        # 每轮保存一个 checkpoint，方便后续评估选最优 epoch
         torch.save({"model_state_dict": model.state_dict(), "feature_info": feature_info, "epoch": epoch + 1, "loss": avg_loss},
                    MODEL_DIR / f"two_tower_epoch_{epoch + 1}.pt")
 
+    # 最终模型覆盖写入 two_tower.pt
     torch.save({"model_state_dict": model.state_dict(), "feature_info": feature_info, "epoch": epochs}, MODEL_PATH)
     print(f"模型已保存到: {MODEL_PATH}")
 
 
 def _train_step(model, batch, loss_fn, optimizer):
+    # 单个 batch 的前向 + 反向 + 参数更新，返回 loss 标量
     score = model(batch["user_index"], batch["gender_index"], batch["age_index"],
                   batch["occupation_index"], batch["movie_index"], batch["genre_vector"], batch["user_behavior"])
     loss = loss_fn(score, batch["label"])

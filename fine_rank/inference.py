@@ -1,109 +1,93 @@
+# MMoE 精排推理
+# 对粗排候选电影用 MMoE 模型打分，默认取 like 任务分数排序，返回 top_k
 from pathlib import Path
 import torch
-from .model import MMoERanker
-from .model import get_device
+from .model import MMoERanker, get_device
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+# 默认加载 epoch 6 的精排模型（验证集表现最优）
 DEFAULT_MODEL_PATH = BASE_DIR / "models" / "fine_rank" / "mmoe_epoch_6.pt"
+
 
 def load_checkpoint(model_path, device):
     return torch.load(model_path, map_location=device, weights_only=False)
 
-def build_model_from_checkpoint(checkpoint, device):
-    feature_info = checkpoint["feature_info"]
 
+def build_model_from_checkpoint(checkpoint, device):
+    # 从 feature_info 中读取各 Embedding 大小，重建模型结构后载入权重
+    fi = checkpoint["feature_info"]
     model = MMoERanker(
-        user_count=len(feature_info["user_id_to_index"]),
-        movie_count=len(feature_info["movie_id_to_index"]),
-        gender_count=feature_info["gender_count"],
-        age_count=feature_info["age_count"],
-        occupation_count=feature_info["occupation_count"],
-        genre_count=feature_info["genre_count"],
+        user_count=len(fi["user_id_to_index"]),
+        movie_count=len(fi["movie_id_to_index"]),
+        gender_count=fi["gender_count"],
+        age_count=fi["age_count"],
+        occupation_count=fi["occupation_count"],
+        genre_count=fi["genre_count"],
     )
     model.load_state_dict(checkpoint["model_state_dict"])
     model = model.to(device)
     model.eval()
-
     return model
 
 
 class MMoEFineRanker:
+    """加载 MMoE 精排模型，对候选电影批量打分，按指定任务分数返回 top_k。"""
+
     def __init__(self, model_path=DEFAULT_MODEL_PATH, score_name="like"):
         self.device = get_device()
         self.checkpoint = load_checkpoint(model_path, self.device)
         self.feature_info = self.checkpoint["feature_info"]
         self.model = build_model_from_checkpoint(self.checkpoint, self.device)
-        self.score_name = score_name
+        self.score_name = score_name  # 取哪个任务分数作为最终精排分（like/high_rating/rating）
 
     def rank(self, user_id, candidates, top_k=50):
-        user_id_to_index = self.feature_info["user_id_to_index"]
-        movie_id_to_index = self.feature_info["movie_id_to_index"]
-        user_features = self.feature_info["user_features"]
-        movie_features = self.feature_info["movie_features"]
+        fi = self.feature_info
 
-        if user_id not in user_id_to_index:
+        # 用户不在训练集则无法打分
+        if user_id not in fi["user_id_to_index"]:
             return []
 
-        valid_items = []
-        for item in candidates:
-            movie_id = item.get("movie_id", item.get("item_id"))
-
-            if movie_id in movie_id_to_index:
-                valid_items.append(item)
-
+        # 过滤未知电影
+        valid_items = [
+            item for item in candidates
+            if item.get("movie_id", item.get("item_id")) in fi["movie_id_to_index"]
+        ]
         if not valid_items:
             return []
 
-        user_feature = user_features[user_id]
-        user_index = user_id_to_index[user_id]
+        user_index = fi["user_id_to_index"][user_id]
+        user_feature = fi["user_features"][user_id]
 
-        user_indexes = []
-        gender_indexes = []
-        age_indexes = []
-        occupation_indexes = []
-        movie_indexes = []
-        genre_indexes = []
-        recall_scores = []
-        coarse_scores = []
+        # 为每个候选电影组装输入特征
+        user_indexes, gender_indexes, age_indexes, occupation_indexes = [], [], [], []
+        movie_indexes, genre_indexes, recall_scores, coarse_scores = [], [], [], []
 
         for item in valid_items:
-            movie_id = item.get("movie_id", item.get("item_id"))
-
+            mid = item.get("movie_id", item.get("item_id"))
             user_indexes.append(user_index)
             gender_indexes.append(user_feature["gender"])
             age_indexes.append(user_feature["age"])
             occupation_indexes.append(user_feature["occupation"])
-            movie_indexes.append(movie_id_to_index[movie_id])
-            genre_indexes.append(movie_features[movie_id]["genres"])
+            movie_indexes.append(fi["movie_id_to_index"][mid])
+            genre_indexes.append(fi["movie_features"][mid]["genres"])
             recall_scores.append(item.get("recall_score", 0.0))
             coarse_scores.append(item.get("rough_rank_score", 0.0))
 
+        # 批量推理
+        t = lambda vals, dtype: torch.tensor(vals, dtype=dtype, device=self.device)
         with torch.no_grad():
             outputs = self.model(
-                user_id=torch.tensor(
-                    user_indexes, dtype=torch.long, device=self.device
-                ),
-                gender=torch.tensor(
-                    gender_indexes, dtype=torch.long, device=self.device
-                ),
-                age=torch.tensor(age_indexes, dtype=torch.long, device=self.device),
-                occupation=torch.tensor(
-                    occupation_indexes, dtype=torch.long, device=self.device
-                ),
-                movie_id=torch.tensor(
-                    movie_indexes, dtype=torch.long, device=self.device
-                ),
-                genres=torch.tensor(
-                    genre_indexes, dtype=torch.long, device=self.device
-                ),
-                recall_score=torch.tensor(
-                    recall_scores, dtype=torch.float, device=self.device
-                ),
-                coarse_score=torch.tensor(
-                    coarse_scores, dtype=torch.float, device=self.device
-                ),
+                user_id=t(user_indexes, torch.long),
+                gender=t(gender_indexes, torch.long),
+                age=t(age_indexes, torch.long),
+                occupation=t(occupation_indexes, torch.long),
+                movie_id=t(movie_indexes, torch.long),
+                genres=t(genre_indexes, torch.long),
+                recall_score=t(recall_scores, torch.float),
+                coarse_score=t(coarse_scores, torch.float),
             )
 
+            # 根据 score_name 选取对应任务的输出作为最终精排分
             if self.score_name == "like":
                 scores = torch.sigmoid(outputs["like_logit"])
             elif self.score_name == "high_rating":
@@ -115,15 +99,10 @@ class MMoEFineRanker:
 
             scores = scores.cpu().tolist()
 
-        ranked_items = []
-        for item, score in zip(valid_items, scores):
-            ranked_items.append(
-                {
-                    **item,
-                    "fine_rank_score": score,
-                    "fine_rank_source": f"mmoe_epoch_6_{self.score_name}",
-                }
-            )
-
+        # 把精排分附加到原 item 上，排序后取 top_k
+        ranked_items = [
+            {**item, "fine_rank_score": score, "fine_rank_source": f"mmoe_epoch_6_{self.score_name}"}
+            for item, score in zip(valid_items, scores)
+        ]
         ranked_items.sort(key=lambda item: item["fine_rank_score"], reverse=True)
         return ranked_items[:top_k]
