@@ -1,7 +1,10 @@
 # 推荐系统主链路入口
 # 编排召回 -> 粗排 -> 精排 -> 重排四个阶段，任意阶段返回空则兜底走冷启动
+import logging
 from pathlib import Path
 from time import perf_counter
+
+logger = logging.getLogger(__name__)
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -78,7 +81,7 @@ class RecommenderPipeline:
         try:
             profile = self.user_profile_repository.get_user_profile(user_id)
         except Exception as error:
-            print(f"MySQL user profile lookup failed; using cold-start fallback: {error}")
+            logger.warning("MySQL 用户画像查询失败，走冷启动兜底: %s", error)
             return age, occupation
 
         if profile is None:
@@ -136,7 +139,7 @@ class Reranker:
                 ratings = dataset_repository.list_ratings(split="train")
                 movies = dataset_repository.list_movies()
             except Exception as error:
-                print(f"MySQL rerank data loading failed; using dat fallback: {error}")
+                logger.warning("MySQL 重排数据加载失败，回退到 .dat 文件: %s", error)
 
         self.user_seen_movies = load_user_seen_movies(ratings=ratings)
         self.movie_genres = load_movie_genres(movies=movies)
@@ -284,7 +287,7 @@ def build_cold_start_recommender(user_profile_repository=None, dataset_repositor
             movies=movies,
         )
     except Exception as error:
-        print(f"MySQL cold-start profile loading failed; using dat fallback: {error}")
+        logger.warning("MySQL 冷启动画像加载失败，回退到 .dat 文件: %s", error)
         return ColdStartRecommender()
 
 

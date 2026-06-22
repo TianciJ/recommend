@@ -5,14 +5,11 @@ from pathlib import Path
 import torch
 
 from .model import ThreeTowerRoughRankModel
+from utils import get_device
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 MODEL_DIR = BASE_DIR / "models" / "rough_rank"
 MODEL_PATH = MODEL_DIR / "three_tower.pt"
-
-
-def get_device():
-    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def load_checkpoint(model_path=MODEL_PATH, device=None):

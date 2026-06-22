@@ -2,6 +2,7 @@
 # 用户塔和物品塔各自输出 64 维向量，用余弦相似度作为召回分数
 # 训练时以 rating >= 4 为正样本，rating <= 2 为负样本，rating == 3 跳过
 import argparse
+import logging
 import math
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from torch.nn import Embedding, Linear, ReLU, Sequential
 from torch.utils.data import DataLoader, Dataset
 
 from .movie_utils import add_movie_titles, print_recommendations
+from utils import get_device
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 TRAIN_DIR = BASE_DIR / "train_data"
@@ -21,9 +23,7 @@ MOVIES_PATH = TRAIN_DIR / "movies.dat"
 MODEL_DIR = BASE_DIR / "models" / "recall"
 MODEL_PATH = MODEL_DIR / "two_tower.pt"
 
-
-def get_device():
-    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+logger = logging.getLogger(__name__)
 
 
 # ---------- 训练数据集 ----------
@@ -305,10 +305,21 @@ class TwoTowerRecaller:
         self.feature_info = self.checkpoint["feature_info"]
         self.model = build_model_from_checkpoint(self.checkpoint, self.device)
 
+        # 预计算所有电影的索引和 genre 向量并缓存为 tensor
+        # 电影侧特征在模型不变时是静态的，无需每次请求重新构建
+        # 推理时只需计算用户向量，再与缓存的电影矩阵做批量余弦相似度
+        fi = self.feature_info
+        movie_count = len(fi["index_to_movie_id"])
+        self._movie_tensor = torch.arange(movie_count, dtype=torch.long, device=self.device)
+        self._genre_tensor = torch.tensor(
+            [fi["movie_features"][fi["index_to_movie_id"][i]]["genre_vector"] for i in range(movie_count)],
+            dtype=torch.float, device=self.device,
+        )
+
     def recommend(self, user_id, top_k=10, include_title=True):
         fi = self.feature_info
         if user_id not in fi["user_id_to_index"]:
-            print("这个用户没有出现在训练集中，暂时无法用双塔召回")
+            logger.warning("user_id=%s 不在训练集中，双塔召回跳过", user_id)
             return []
 
         # 把用户索引附加到 feature dict 上，供 _build_user_tensors 使用
@@ -317,13 +328,8 @@ class TwoTowerRecaller:
 
         with torch.no_grad():
             u, g, a, o, beh = _build_user_tensors(user_feature, movie_count, fi, self.device)
-            movie_tensor = torch.arange(movie_count, dtype=torch.long, device=self.device)
-            # 预取所有电影的 genre 向量，拼成矩阵一次性过物品塔
-            genre_tensor = torch.tensor(
-                [fi["movie_features"][fi["index_to_movie_id"][i]]["genre_vector"] for i in range(movie_count)],
-                dtype=torch.float, device=self.device,
-            )
-            scores = self.model(u, g, a, o, movie_tensor, genre_tensor, beh)
+            # 直接使用初始化时预计算的电影侧 tensor，避免每次请求重建
+            scores = self.model(u, g, a, o, self._movie_tensor, self._genre_tensor, beh)
             top_scores, top_idxs = torch.topk(scores, top_k)
 
         recommendations = [
@@ -335,33 +341,7 @@ class TwoTowerRecaller:
 
 def recommend_for_user(user_id, top_k=10):
     # 命令行单次推理入口（每次都重新加载模型，批量使用请用 TwoTowerRecaller 类）
-    device = get_device()
-    checkpoint = torch.load(MODEL_PATH, map_location=device)
-    fi = checkpoint["feature_info"]
-
-    if user_id not in fi["user_id_to_index"]:
-        print("这个用户没有出现在训练集中，暂时无法用双塔召回")
-        return []
-
-    model = build_model_from_checkpoint(checkpoint, device)
-    user_feature = {**fi["user_features"][user_id], "_index": fi["user_id_to_index"][user_id]}
-    movie_count = len(fi["index_to_movie_id"])
-
-    with torch.no_grad():
-        u, g, a, o, beh = _build_user_tensors(user_feature, movie_count, fi, device)
-        movie_tensor = torch.arange(movie_count, dtype=torch.long, device=device)
-        genre_tensor = torch.tensor(
-            [fi["movie_features"][fi["index_to_movie_id"][i]]["genre_vector"] for i in range(movie_count)],
-            dtype=torch.float, device=device,
-        )
-        scores = model(u, g, a, o, movie_tensor, genre_tensor, beh)
-        top_scores, top_idxs = torch.topk(scores, top_k)
-
-    recommendations = [
-        {"movie_id": fi["index_to_movie_id"][int(idx)], "score": float(s)}
-        for s, idx in zip(top_scores.cpu(), top_idxs.cpu())
-    ]
-    return add_movie_titles(recommendations)
+    return TwoTowerRecaller().recommend(user_id=user_id, top_k=top_k)
 
 
 # ---------- 训练 ----------
@@ -369,7 +349,7 @@ def recommend_for_user(user_id, top_k=10):
 def train_model(epochs=3, batch_size=1024, learning_rate=0.001):
     samples, feature_info = load_train_samples()
     device = get_device()
-    print(f"当前训练设备: {device}")
+    logger.info("当前训练设备: %s", device)
 
     dataloader = DataLoader(RatingDataset(samples), batch_size=batch_size, shuffle=True)
     model = TwoTowerModel(
@@ -392,7 +372,7 @@ def train_model(epochs=3, batch_size=1024, learning_rate=0.001):
             for batch in dataloader
         )
         avg_loss = total_loss / len(dataloader)
-        print(f"epoch={epoch + 1}, loss={avg_loss:.4f}")
+        logger.info("epoch=%d  loss=%.4f", epoch + 1, avg_loss)
 
         # 每轮保存一个 checkpoint，方便后续评估选最优 epoch
         torch.save({"model_state_dict": model.state_dict(), "feature_info": feature_info, "epoch": epoch + 1, "loss": avg_loss},
@@ -400,7 +380,7 @@ def train_model(epochs=3, batch_size=1024, learning_rate=0.001):
 
     # 最终模型覆盖写入 two_tower.pt
     torch.save({"model_state_dict": model.state_dict(), "feature_info": feature_info, "epoch": epochs}, MODEL_PATH)
-    print(f"模型已保存到: {MODEL_PATH}")
+    logger.info("模型已保存到: %s", MODEL_PATH)
 
 
 def _train_step(model, batch, loss_fn, optimizer):
@@ -415,6 +395,7 @@ def _train_step(model, batch, loss_fn, optimizer):
 
 
 def main():
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=["train", "recommend"], default="train")
     parser.add_argument("--user-id", type=int, default=1)

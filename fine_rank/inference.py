@@ -95,7 +95,7 @@ class MMoEFineRanker:
             elif self.score_name == "rating":
                 scores = outputs["rating_pred"]
             else:
-                raise ValueError("score_name must be like, high_rating, or rating")
+                raise ValueError("score_name 须为 like、high_rating 或 rating 之一")
 
             scores = scores.cpu().tolist()
 

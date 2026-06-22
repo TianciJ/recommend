@@ -8,9 +8,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
-def get_device():
-    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+from utils import get_device
 
 
 def move_batch_to_device(batch, device):
@@ -165,40 +163,42 @@ def forward_from_batch(model, batch):
 
 # ---------- 训练与评估 ----------
 
+_LOSS_KEYS = ("total", "like", "high", "rating")
+
+
+def _accum_losses(sums, losses):
+    sums["total"] += losses["total_loss"].item()
+    sums["like"] += losses["like_loss"].item()
+    sums["high"] += losses["high_loss"].item()
+    sums["rating"] += losses["rating_loss"].item()
+
+
+def _avg_losses(sums, n):
+    return {f"{k}_loss": sums[k] / n for k in _LOSS_KEYS}
+
+
 def train_one_epoch(model, dataloader, optimizer, device):
     model.train()
-    sums = {"total": 0, "like": 0, "high": 0, "rating": 0}
-    batch_count = 0
+    sums = dict.fromkeys(_LOSS_KEYS, 0)
 
-    for batch in dataloader:
+    for i, batch in enumerate(dataloader, 1):
         batch = move_batch_to_device(batch, device)
         losses = compute_mmoe_loss(forward_from_batch(model, batch), batch)
-
         optimizer.zero_grad()
         losses["total_loss"].backward()
         optimizer.step()
+        _accum_losses(sums, losses)
 
-        sums["total"] += losses["total_loss"].item()
-        sums["like"] += losses["like_loss"].item()
-        sums["high"] += losses["high_loss"].item()
-        sums["rating"] += losses["rating_loss"].item()
-        batch_count += 1
-
-    return {
-        "total_loss": sums["total"] / batch_count,
-        "like_loss": sums["like"] / batch_count,
-        "high_loss": sums["high"] / batch_count,
-        "rating_loss": sums["rating"] / batch_count,
-    }
+    return _avg_losses(sums, i)
 
 
 def evaluate(model, dataloader, device):
     model.eval()
-    sums = {"total": 0, "like": 0, "high": 0, "rating": 0}
-    like_correct = high_correct = sample_count = batch_count = 0
+    sums = dict.fromkeys(_LOSS_KEYS, 0)
+    like_correct = high_correct = sample_count = 0
 
     with torch.no_grad():
-        for batch in dataloader:
+        for i, batch in enumerate(dataloader, 1):
             batch = move_batch_to_device(batch, device)
             outputs = forward_from_batch(model, batch)
             losses = compute_mmoe_loss(outputs, batch)
@@ -209,18 +209,10 @@ def evaluate(model, dataloader, device):
             like_correct += (like_pred == batch["like_label"]).sum().item()
             high_correct += (high_pred == batch["high_rating_label"]).sum().item()
             sample_count += batch["like_label"].shape[0]
-
-            sums["total"] += losses["total_loss"].item()
-            sums["like"] += losses["like_loss"].item()
-            sums["high"] += losses["high_loss"].item()
-            sums["rating"] += losses["rating_loss"].item()
-            batch_count += 1
+            _accum_losses(sums, losses)
 
     return {
-        "total_loss": sums["total"] / batch_count,
-        "like_loss": sums["like"] / batch_count,
-        "high_loss": sums["high"] / batch_count,
-        "rating_loss": sums["rating"] / batch_count,
+        **_avg_losses(sums, i),
         "like_accuracy": like_correct / sample_count,
         "high_rating_accuracy": high_correct / sample_count,
     }
@@ -240,7 +232,7 @@ def inference_rank(model, batch, device, top_k=50, score_name="like"):
         elif score_name == "rating":
             scores = outputs["rating_pred"]
         else:
-            raise ValueError("score_name must be like, high_rating, or rating")
+            raise ValueError("score_name 须为 like、high_rating 或 rating 之一")
 
         top_scores, top_indexes = torch.topk(scores, min(top_k, scores.shape[0]))
 

@@ -149,12 +149,12 @@ def to_upsert_user_params(user):
 def validate_username(username):
     # 非空字符串，最长 64 字符
     if username is None:
-        raise ValueError("username is required")
+        raise ValueError("用户名不能为空")
     normalized = str(username).strip()
     if not normalized:
-        raise ValueError("username is required")
+        raise ValueError("用户名不能为空")
     if len(normalized) > 64:
-        raise ValueError("username must be at most 64 characters")
+        raise ValueError("用户名最长 64 个字符")
     return normalized
 
 
@@ -162,14 +162,14 @@ def validate_occupation(occupation):
     # MovieLens 职业编码范围 0-20
     occupation = int(occupation)
     if occupation < 0 or occupation > 20:
-        raise ValueError("occupation must be between 0 and 20")
+        raise ValueError("职业编码须在 0-20 之间")
     return occupation
 
 
 def validate_gender(gender):
     normalized = str(gender or "U").strip() or "U"
     if len(normalized) > 8:
-        raise ValueError("gender must be at most 8 characters")
+        raise ValueError("性别字段最长 8 个字符")
     return normalized
 
 
@@ -178,7 +178,7 @@ def normalize_age_to_movielens_bucket(age):
     # 段划分：<18, 18-24, 25-34, 35-44, 45-49, 50-55, 56+
     age = int(age)
     if age <= 0:
-        raise ValueError("age must be positive")
+        raise ValueError("年龄必须为正整数")
     if age < 18:  return 1
     if age < 25:  return 18
     if age < 35:  return 25

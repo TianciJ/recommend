@@ -41,12 +41,12 @@ def create_mysql_connection(config=None):
     config = config or get_mysql_config_from_env()
 
     if config is None:
-        raise RuntimeError("MySQL is not configured. Set MYSQL_USER and MYSQL_PASSWORD.")
+        raise RuntimeError("MySQL 未配置，请设置环境变量 MYSQL_USER 和 MYSQL_PASSWORD。")
 
     try:
         import pymysql
     except ImportError as error:
-        raise RuntimeError("Missing dependency pymysql. Install it with: pip install pymysql") from error
+        raise RuntimeError("缺少依赖 pymysql，请执行 pip install pymysql 安装。") from error
 
     return pymysql.connect(
         host=config.host,

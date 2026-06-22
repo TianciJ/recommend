@@ -1,10 +1,12 @@
 import argparse
+import math
 import re
 from pathlib import Path
 
 import torch
 
-from .two_tower import build_model_from_checkpoint, get_device
+from .two_tower import build_model_from_checkpoint
+from utils import get_device
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -30,23 +32,22 @@ def model_sort_key(p):
     return (0, int(m.group(1))) if m else (1, p.name)
 
 
-def load_user_seen_movies(ratings_path=TRAIN_RATINGS_PATH):
-    mysql_dataset = load_mysql_dataset_if_configured(split="train")
+def _load_user_movie_set(split, ratings_path, min_rating=None):
+    mysql_dataset = load_mysql_dataset_if_configured(split=split)
     ratings = mysql_dataset["ratings"] if mysql_dataset else load_ratings_from_dat(ratings_path)
     result = {}
     for r in ratings:
-        result.setdefault(int(r["user_id"]), set()).add(int(r["movie_id"]))
+        if min_rating is None or int(r["rating"]) >= min_rating:
+            result.setdefault(int(r["user_id"]), set()).add(int(r["movie_id"]))
     return result
+
+
+def load_user_seen_movies(ratings_path=TRAIN_RATINGS_PATH):
+    return _load_user_movie_set("train", ratings_path)
 
 
 def load_test_liked_movies(ratings_path=TEST_RATINGS_PATH):
-    mysql_dataset = load_mysql_dataset_if_configured(split="test")
-    ratings = mysql_dataset["ratings"] if mysql_dataset else load_ratings_from_dat(ratings_path)
-    result = {}
-    for r in ratings:
-        if int(r["rating"]) >= 4:
-            result.setdefault(int(r["user_id"]), set()).add(int(r["movie_id"]))
-    return result
+    return _load_user_movie_set("test", ratings_path, min_rating=4)
 
 
 def load_ratings_from_dat(ratings_path):
@@ -81,6 +82,11 @@ def recommend_for_eval(model, feature_info, user_id, user_seen_movies, movie_ten
     uf = fi["user_features"][user_id]
     movie_count = len(fi["index_to_movie_id"])
     repeat = lambda val, dtype: torch.tensor([val] * movie_count, dtype=dtype, device=device)
+    max_count = fi.get("max_rating_count", 1) or 1
+    user_behavior = torch.tensor(
+        [[uf["avg_rating"] / 5.0, math.log1p(uf["rating_count"]) / math.log1p(max_count)]] * movie_count,
+        dtype=torch.float, device=device,
+    )
 
     with torch.no_grad():
         scores = model(
@@ -90,6 +96,7 @@ def recommend_for_eval(model, feature_info, user_id, user_seen_movies, movie_ten
             repeat(uf["occupation_index"], torch.long),
             movie_tensor,
             genre_tensor,
+            user_behavior,
         )
         for seen_id in user_seen_movies.get(user_id, set()):
             if seen_id in fi["movie_id_to_index"]:

@@ -8,6 +8,7 @@ from recommender_pipeline import RecommenderPipeline
 
 BASE_DIR = Path(__file__).resolve().parent
 TEST_RATINGS_PATH = BASE_DIR / "test_data" / "ratings.dat"
+METRIC_NAMES = ["precision", "recall", "hit_rate", "mrr", "ndcg"]
 
 
 def parse_k_list(value):
@@ -16,22 +17,12 @@ def parse_k_list(value):
 
 def load_test_liked_movies(ratings_path=TEST_RATINGS_PATH, min_rating=4):
     test_liked_movies = {}
-
-    with ratings_path.open("r", encoding="utf-8") as ratings_file:
-        for line in ratings_file:
-            user_id, movie_id, rating, timestamp = line.strip().split("::")
-            user_id = int(user_id)
-            movie_id = int(movie_id)
-            rating = int(rating)
-
-            if rating < min_rating:
+    with ratings_path.open("r", encoding="utf-8") as f:
+        for line in f:
+            user_id, movie_id, rating, _ = line.strip().split("::")
+            if int(rating) < min_rating:
                 continue
-
-            if user_id not in test_liked_movies:
-                test_liked_movies[user_id] = set()
-
-            test_liked_movies[user_id].add(movie_id)
-
+            test_liked_movies.setdefault(int(user_id), set()).add(int(movie_id))
     return test_liked_movies
 
 
@@ -87,34 +78,13 @@ def calculate_mrr(movie_ids, liked_movies):
 
 
 def calculate_ndcg(movie_ids, liked_movies, k):
-    dcg = 0
-
-    for rank, movie_id in enumerate(movie_ids[:k], start=1):
-        if movie_id in liked_movies:
-            dcg += 1 / math.log2(rank + 1)
-
-    ideal_hit_count = min(len(liked_movies), k)
-    ideal_dcg = 0
-
-    for rank in range(1, ideal_hit_count + 1):
-        ideal_dcg += 1 / math.log2(rank + 1)
-
-    if ideal_dcg == 0:
-        return 0
-
-    return dcg / ideal_dcg
+    dcg = sum(1 / math.log2(r + 1) for r, mid in enumerate(movie_ids[:k], 1) if mid in liked_movies)
+    ideal_dcg = sum(1 / math.log2(r + 1) for r in range(1, min(len(liked_movies), k) + 1))
+    return dcg / ideal_dcg if ideal_dcg > 0 else 0
 
 
 def build_empty_metric_sums(k_list):
-    metric_names = ["precision", "recall", "hit_rate", "mrr", "ndcg"]
-
-    return {
-        k: {
-            **{metric_name: 0 for metric_name in metric_names},
-            "user_count": 0,
-        }
-        for k in k_list
-    }
+    return {k: {m: 0 for m in METRIC_NAMES} | {"user_count": 0} for k in k_list}
 
 
 def add_user_metrics(metric_sums, user_metrics):
@@ -127,30 +97,10 @@ def add_user_metrics(metric_sums, user_metrics):
 
 def average_metric_sums(metric_sums):
     averaged_metrics = {}
-
     for k, sums in metric_sums.items():
-        user_count = sums["user_count"]
-
-        if user_count == 0:
-            averaged_metrics[k] = {
-                "precision": 0,
-                "recall": 0,
-                "hit_rate": 0,
-                "mrr": 0,
-                "ndcg": 0,
-                "user_count": 0,
-            }
-            continue
-
-        averaged_metrics[k] = {
-            "precision": sums["precision"] / user_count,
-            "recall": sums["recall"] / user_count,
-            "hit_rate": sums["hit_rate"] / user_count,
-            "mrr": sums["mrr"] / user_count,
-            "ndcg": sums["ndcg"] / user_count,
-            "user_count": user_count,
-        }
-
+        n = sums["user_count"]
+        averaged_metrics[k] = {m: (sums[m] / n if n > 0 else 0) for m in METRIC_NAMES}
+        averaged_metrics[k]["user_count"] = n
     return averaged_metrics
 
 
