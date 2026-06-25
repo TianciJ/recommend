@@ -6,7 +6,7 @@ from pathlib import Path
 import torch
 
 from .two_tower import build_model_from_checkpoint
-from utils import get_device
+from utils import get_device, load_checkpoint
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -14,10 +14,6 @@ TRAIN_RATINGS_PATH = BASE_DIR / "train_data" / "ratings.dat"
 TEST_RATINGS_PATH = BASE_DIR / "test_data" / "ratings.dat"
 MODEL_DIR = BASE_DIR / "models" / "recall"
 FINAL_MODEL_PATH = MODEL_DIR / "two_tower.pt"
-
-
-def load_checkpoint(model_path, device):
-    return torch.load(model_path, map_location=device, weights_only=False)
 
 
 def find_model_paths(model_dir=MODEL_DIR):

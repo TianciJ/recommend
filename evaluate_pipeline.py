@@ -4,6 +4,7 @@ from pathlib import Path
 from time import perf_counter
 
 from recommender_pipeline import RecommenderPipeline
+from utils import elapsed_ms
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -34,15 +35,7 @@ def get_movie_id(item):
 
 
 def extract_movie_ids(recommendations):
-    movie_ids = []
-
-    for item in recommendations:
-        movie_id = get_movie_id(item)
-
-        if movie_id is not None:
-            movie_ids.append(movie_id)
-
-    return movie_ids
+    return [mid for item in recommendations if (mid := get_movie_id(item)) is not None]
 
 
 def calculate_ranking_metrics(recommendations, liked_movies, k_list):
@@ -84,7 +77,7 @@ def calculate_ndcg(movie_ids, liked_movies, k):
 
 
 def build_empty_metric_sums(k_list):
-    return {k: {m: 0 for m in METRIC_NAMES} | {"user_count": 0} for k in k_list}
+    return {k: {m: 0 for m in METRIC_NAMES + ["user_count"]} for k in k_list}
 
 
 def add_user_metrics(metric_sums, user_metrics):
@@ -135,29 +128,6 @@ def average_timing_sums(timing_sums):
             }
             for stage_name, stage_sums in timing_sums["stages"].items()
         },
-    }
-
-
-def elapsed_ms(start_time):
-    return (perf_counter() - start_time) * 1000
-
-
-def build_command_timing_summary(
-    pipeline_init_ms,
-    evaluation_wall_ms,
-    output_print_ms,
-    command_total_ms,
-    evaluated_users,
-):
-    avg_command_ms_per_user = command_total_ms / evaluated_users if evaluated_users > 0 else 0
-
-    return {
-        "pipeline_init_ms": pipeline_init_ms,
-        "evaluation_wall_ms": evaluation_wall_ms,
-        "output_print_ms": output_print_ms,
-        "command_total_ms": command_total_ms,
-        "evaluated_users": evaluated_users,
-        "avg_command_ms_per_user": avg_command_ms_per_user,
     }
 
 
@@ -308,13 +278,16 @@ def main():
     print_timing_results(results["timing"])
     output_print_ms = elapsed_ms(output_print_start)
 
-    command_timing = build_command_timing_summary(
-        pipeline_init_ms=pipeline_init_ms,
-        evaluation_wall_ms=evaluation_wall_ms,
-        output_print_ms=output_print_ms,
-        command_total_ms=elapsed_ms(command_start),
-        evaluated_users=results["evaluated_users"],
-    )
+    command_total_ms = elapsed_ms(command_start)
+    n = results["evaluated_users"]
+    command_timing = {
+        "pipeline_init_ms": pipeline_init_ms,
+        "evaluation_wall_ms": evaluation_wall_ms,
+        "output_print_ms": output_print_ms,
+        "command_total_ms": command_total_ms,
+        "evaluated_users": n,
+        "avg_command_ms_per_user": command_total_ms / n if n > 0 else 0,
+    }
     print_command_timing_results(command_timing)
 
 

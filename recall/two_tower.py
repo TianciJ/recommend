@@ -13,7 +13,7 @@ from torch.nn import Embedding, Linear, ReLU, Sequential
 from torch.utils.data import DataLoader, Dataset
 
 from .movie_utils import add_movie_titles, print_recommendations
-from utils import get_device
+from utils import get_device, load_checkpoint, move_batch_to_device
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 TRAIN_DIR = BASE_DIR / "train_data"
@@ -256,10 +256,6 @@ def load_train_samples(ratings_path=TRAIN_RATINGS_PATH, ratings=None, users=None
 def load_mysql_dataset_if_configured(split="train"):
     from database.dataset_repository import load_mysql_dataset
     return load_mysql_dataset(split=split)
-
-
-def move_batch_to_device(batch, device):
-    return {k: v.to(device) for k, v in batch.items()}
 
 
 def build_model_from_checkpoint(checkpoint, device):

@@ -3,14 +3,11 @@
 from pathlib import Path
 import torch
 from .model import MMoERanker, get_device
+from utils import load_checkpoint
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 # 默认加载 epoch 6 的精排模型（验证集表现最优）
 DEFAULT_MODEL_PATH = BASE_DIR / "models" / "fine_rank" / "mmoe_epoch_6.pt"
-
-
-def load_checkpoint(model_path, device):
-    return torch.load(model_path, map_location=device, weights_only=False)
 
 
 def build_model_from_checkpoint(checkpoint, device):

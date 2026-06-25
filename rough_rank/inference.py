@@ -5,17 +5,11 @@ from pathlib import Path
 import torch
 
 from .model import ThreeTowerRoughRankModel
-from utils import get_device
+from utils import get_device, load_checkpoint
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 MODEL_DIR = BASE_DIR / "models" / "rough_rank"
 MODEL_PATH = MODEL_DIR / "three_tower.pt"
-
-
-def load_checkpoint(model_path=MODEL_PATH, device=None):
-    if device is None:
-        device = get_device()
-    return torch.load(model_path, map_location=device, weights_only=False)
 
 
 def build_model_from_checkpoint(checkpoint, device):
@@ -57,7 +51,7 @@ class RoughRanker:
 
     def __init__(self, model_path=MODEL_PATH):
         self.device = get_device()
-        self.checkpoint = load_checkpoint(model_path=model_path, device=self.device)
+        self.checkpoint = load_checkpoint(model_path, self.device)
         self.feature_info = self.checkpoint["feature_info"]
         self.model = build_model_from_checkpoint(self.checkpoint, self.device)
 

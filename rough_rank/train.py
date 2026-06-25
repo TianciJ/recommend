@@ -10,7 +10,9 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
 
 from .model import ThreeTowerRoughRankModel
-from recall.two_tower import load_movies_from_dat, load_mysql_dataset_if_configured, load_ratings_from_dat, load_users_from_dat
+from .inference import build_dense_features
+from recall.two_tower import load_movies_from_dat, load_movie_features, load_mysql_dataset_if_configured, load_ratings_from_dat, load_user_features, load_users_from_dat
+from utils import get_device, load_checkpoint, move_batch_to_device
 
 # 项目根目录及各数据目录路径
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -27,24 +29,15 @@ MODEL_PATH = MODEL_DIR / "three_tower.pt"
 DENSE_FEATURE_DIM = 5  # user_avg_rating, user_count, movie_avg_rating, movie_count, recall_score
 
 
-# 返回可用的训练设备，优先使用 GPU
-def get_device():
-    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-
-# 粗排训练数据集，封装样本列表，供 DataLoader 按批次读取
-# samples: 由 load_samples 构建的字典列表，每条包含用户/电影特征和标签
 class RoughRankDataset(Dataset):
     def __init__(self, samples):
-        self.samples = samples  # 原始样本列表
+        self.samples = samples
 
-    # 返回样本总数
     def __len__(self):
         return len(self.samples)
 
-    # 将第 idx 条样本的各字段转为 Tensor 并返回
-    # 整数索引类特征用 long，浮点特征用 float，标签用 float（BCEWithLogitsLoss 要求）
     def __getitem__(self, idx):
+        # 整数索引类特征用 long，浮点特征用 float，标签用 float（BCEWithLogitsLoss 要求）
         s = self.samples[idx]
         return {
             "user_index": torch.tensor(s["user_index"], dtype=torch.long),
@@ -58,72 +51,6 @@ class RoughRankDataset(Dataset):
         }
 
 
-# 加载用户画像特征，并为性别、年龄、职业建立字符串到整数索引的映射
-# users_path: users.dat 文件路径（当 users 为 None 时从文件读取）
-# users: 可直接传入已加载的用户列表，避免重复 IO（MySQL 数据源场景使用）
-# 返回：user_features 字典（uid -> 各索引）以及三个类别映射字典
-def load_user_features(users_path=USERS_PATH, users=None):
-    if users is None:
-        users = load_users_from_dat(users_path)
-
-    gender_to_index, age_to_index, occupation_to_index = {}, {}, {}
-    user_features = {}
-
-    for user in users:
-        uid = int(user["user_id"])
-        gender, age, occ = str(user["gender"]), str(user["age"]), str(user["occupation"])
-
-        # 首次出现则分配新索引，保证索引连续且从 0 开始
-        if gender not in gender_to_index:
-            gender_to_index[gender] = len(gender_to_index)
-        if age not in age_to_index:
-            age_to_index[age] = len(age_to_index)
-        if occ not in occupation_to_index:
-            occupation_to_index[occ] = len(occupation_to_index)
-
-        user_features[uid] = {
-            "gender_index": gender_to_index[gender],
-            "age_index": age_to_index[age],
-            "occupation_index": occupation_to_index[occ],
-        }
-
-    return user_features, gender_to_index, age_to_index, occupation_to_index
-
-
-# 加载电影特征，将每部电影的 genre 列表转为多热（multi-hot）向量
-# movies_path: movies.dat 文件路径（当 movies 为 None 时从文件读取）
-# movies: 可直接传入已加载的电影列表
-# 返回：movie_features 字典（mid -> genre_vector）以及 genre 到索引的映射
-def load_movie_features(movies_path=MOVIES_PATH, movies=None):
-    if movies is None:
-        movies = load_movies_from_dat(movies_path)
-
-    genre_to_index, movie_genres = {}, {}
-    for movie in movies:
-        mid = int(movie["movie_id"])
-        genre_list = list(movie["genres"])
-        # 遍历所有 genre，动态扩充索引表
-        for g in genre_list:
-            if g not in genre_to_index:
-                genre_to_index[g] = len(genre_to_index)
-        movie_genres[mid] = genre_list
-
-    genre_count = len(genre_to_index)
-    movie_features = {}
-    for mid, genre_list in movie_genres.items():
-        # 构造长度为 genre_count 的 0/1 向量，有该类型则置 1
-        vec = [0] * genre_count
-        for g in genre_list:
-            vec[genre_to_index[g]] = 1
-        movie_features[mid] = {"genre_vector": vec}
-
-    return movie_features, genre_to_index
-
-
-# 统计训练集中每个用户和每部电影的评分均值与评分次数，用于构建稠密特征
-# ratings_path: ratings.dat 文件路径
-# ratings: 可直接传入已加载的评分列表
-# 返回包含各统计量及归一化所需最大值的字典
 def build_rating_stats(ratings_path=TRAIN_RATINGS_PATH, ratings=None):
     if ratings is None:
         ratings = load_ratings_from_dat(ratings_path)
@@ -146,32 +73,8 @@ def build_rating_stats(ratings_path=TRAIN_RATINGS_PATH, ratings=None):
     }
 
 
-# 为单条 (user_id, movie_id) 样本构建稠密特征向量（共 DENSE_FEATURE_DIM 维）
-# user_id / movie_id: 原始 ID
-# rating_stats: build_rating_stats 的返回值
-# recall_score: 召回阶段给出的相似度分数，范围 [-1, 1]，默认 0（训练时无召回分）
-# 所有特征归一化到 [0, 1]，方便模型稳定训练
-def build_dense_features(user_id, movie_id, rating_stats, recall_score=0.0):
-    u_count = rating_stats["user_rating_count"].get(user_id, 0)
-    m_count = rating_stats["movie_rating_count"].get(movie_id, 0)
-    # 冷启动用户/电影（无历史评分）默认均值取 3（中间值）
-    u_avg = rating_stats["user_rating_sum"][user_id] / u_count if u_count > 0 else 3
-    m_avg = rating_stats["movie_rating_sum"][movie_id] / m_count if m_count > 0 else 3
-    return [
-        u_avg / 5,                                      # 用户平均评分，归一化到 [0,1]
-        u_count / rating_stats["max_user_count"],       # 用户活跃度，归一化到 [0,1]
-        m_avg / 5,                                      # 电影平均评分，归一化到 [0,1]
-        m_count / rating_stats["max_movie_count"],      # 电影热度，归一化到 [0,1]
-        (float(recall_score) + 1.0) / 2.0,             # [-1,1] → [0,1]
-    ]
-
-
-# 汇总构建模型所需的全部特征元信息，包括各类别数量和 ID 到索引的映射
-# 支持从 MySQL 或本地 .dat 文件加载数据（优先 MySQL）
-# 评分为 3 的样本视为中性，跳过不参与训练，避免噪声标签
-# 返回包含特征映射、统计量和维度信息的字典，供模型初始化和样本构建使用
 def build_feature_info(users=None, movies=None, ratings=None):
-    # 若未传入任何数据，优先尝试从 MySQL 加载训练集
+    # 优先 MySQL，无配置时回退到 .dat 文件
     if users is None and movies is None and ratings is None:
         mysql_dataset = load_mysql_dataset_if_configured(split="train")
         if mysql_dataset is not None:
@@ -212,15 +115,8 @@ def build_feature_info(users=None, movies=None, ratings=None):
     }
 
 
-# 从评分文件（或传入的评分列表）构建训练/测试样本
-# ratings_path: 数据文件路径，用于判断是训练集还是测试集（决定 MySQL split）
-# feature_info: build_feature_info 的返回值，提供特征映射和统计量
-# skip_unknown: 为 True 时跳过训练集中未出现的用户/电影（避免索引越界）
-# ratings: 可直接传入已加载的评分列表
-# 标签规则：评分 >= 4 为正样本（label=1），评分 <= 2 为负样本（label=0），评分 3 跳过
 def load_samples(ratings_path, feature_info, skip_unknown=True, ratings=None):
     if ratings is None:
-        # 根据路径判断加载训练集还是测试集
         split = "test" if ratings_path == TEST_RATINGS_PATH else "train"
         mysql_dataset = load_mysql_dataset_if_configured(split=split)
         ratings = mysql_dataset["ratings"] if mysql_dataset else load_ratings_from_dat(ratings_path)
@@ -252,13 +148,6 @@ def load_samples(ratings_path, feature_info, skip_unknown=True, ratings=None):
     return samples
 
 
-# 将一个 batch 的所有 Tensor 移动到指定设备（CPU 或 GPU）
-def move_batch_to_device(batch, device):
-    return {k: v.to(device) for k, v in batch.items()}
-
-
-# 根据 feature_info 中的各类别数量初始化三塔粗排模型并移动到目标设备
-# feature_info: build_feature_info 的返回值，提供 Embedding 层所需的词表大小
 def build_model(feature_info, device):
     fi = feature_info
     return ThreeTowerRoughRankModel(
@@ -280,9 +169,6 @@ def run_batch(model, batch):
     )
 
 
-# 在验证集上评估模型的损失和准确率
-# 使用 torch.no_grad() 关闭梯度计算以节省显存和加速推理
-# 评估完成后恢复 model.train() 状态，不影响后续训练
 def evaluate(model, dataloader, loss_fn, device):
     model.eval()
     total_loss = correct = total = 0
@@ -292,35 +178,26 @@ def evaluate(model, dataloader, loss_fn, device):
             batch = move_batch_to_device(batch, device)
             score = run_batch(model, batch)
             total_loss += loss_fn(score, batch["label"]).item()
-            # sigmoid 后以 0.5 为阈值转为二分类预测
-            pred = (torch.sigmoid(score) >= 0.5).float()
+            pred = (torch.sigmoid(score) >= 0.5).float()  # 0.5 阈值做二分类
             correct += (pred == batch["label"]).sum().item()
             total += batch["label"].shape[0]
 
     model.train()
-    # 返回平均 loss 和整体准确率
     return total_loss / len(dataloader), correct / total
 
 
-# 完整的训练流程：加载数据 → 构建模型 → 逐 epoch 训练 → 评估 → 保存权重
-# epochs: 训练轮数
-# batch_size: 每批样本数，影响显存占用和梯度更新频率
-# learning_rate: Adam 优化器学习率
-# 每个 epoch 结束后保存一份带 epoch 编号的检查点，方便回滚
-# 全部训练完成后额外保存一份 three_tower.pt 作为最终推理模型
 def train_model(epochs=3, batch_size=1024, learning_rate=0.001):
     device = get_device()
     print(f"当前训练设备: {device}")
 
-    # 构建特征元信息，同时用于初始化模型和构建样本
     feature_info = build_feature_info()
     train_loader = DataLoader(RoughRankDataset(load_samples(TRAIN_RATINGS_PATH, feature_info)), batch_size=batch_size, shuffle=True)
     test_loader = DataLoader(RoughRankDataset(load_samples(TEST_RATINGS_PATH, feature_info)), batch_size=batch_size, shuffle=False)
 
     model = build_model(feature_info, device)
-    loss_fn = nn.BCEWithLogitsLoss()  # 二分类交叉熵，内置 sigmoid，数值更稳定
+    loss_fn = nn.BCEWithLogitsLoss()  # 内置 sigmoid，数值比先 sigmoid 再 BCE 更稳定
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    MODEL_DIR.mkdir(exist_ok=True)  # 确保模型保存目录存在
+    MODEL_DIR.mkdir(exist_ok=True)
 
     for epoch in range(epochs):
         train_loss = 0
@@ -328,27 +205,23 @@ def train_model(epochs=3, batch_size=1024, learning_rate=0.001):
             batch = move_batch_to_device(batch, device)
             score = run_batch(model, batch)
             loss = loss_fn(score, batch["label"])
-            optimizer.zero_grad()   # 清空上一步梯度
-            loss.backward()         # 反向传播计算梯度
-            optimizer.step()        # 更新参数
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
             train_loss += loss.item()
 
-        # 计算该 epoch 的平均训练损失
         train_loss /= len(train_loader)
         test_loss, test_acc = evaluate(model, test_loader, loss_fn, device)
         print(f"epoch={epoch + 1} train_loss={train_loss:.4f} test_loss={test_loss:.4f} test_accuracy={test_acc:.4f}")
 
-        # 保存当前 epoch 的检查点，包含模型权重、特征元信息和训练指标
         torch.save({"model_state_dict": model.state_dict(), "feature_info": feature_info,
                     "epoch": epoch + 1, "train_loss": train_loss, "test_loss": test_loss, "test_accuracy": test_acc},
                    MODEL_DIR / f"three_tower_epoch_{epoch + 1}.pt")
 
-    # 保存最终模型，供推理模块直接加载
     torch.save({"model_state_dict": model.state_dict(), "feature_info": feature_info, "epoch": epochs}, MODEL_PATH)
     print(f"模型已保存到: {MODEL_PATH}")
 
 
-# 命令行入口，解析超参数后调用 train_model
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--epochs", type=int, default=3)

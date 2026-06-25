@@ -141,8 +141,7 @@ class ColdStartRecommender:
             return
 
         max_source_count = max(source_counts.values()) or 1
-        candidate_limit = max(top_k * 5, top_k)
-        top_candidates = source_counts.most_common(candidate_limit)
+        top_candidates = source_counts.most_common(top_k * 5)
 
         for movie_id, positive_count in top_candidates:
             if movie_id in candidate_scores:

@@ -8,12 +8,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from utils import get_device
-
-
-def move_batch_to_device(batch, device):
-    # 把 batch 中所有 tensor 移到指定 device，非 tensor 字段保持原样
-    return {k: v.to(device) if torch.is_tensor(v) else v for k, v in batch.items()}
+from utils import get_device, move_batch_to_device
 
 
 # ---------- 子模块 ----------

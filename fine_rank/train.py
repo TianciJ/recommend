@@ -12,6 +12,7 @@ from .model import MMoERanker, evaluate, get_device, train_one_epoch
 from recall.two_tower import build_model_from_checkpoint as build_recall_model
 from recall.two_tower import load_movies_from_dat, load_mysql_dataset_if_configured, load_ratings_from_dat, load_users_from_dat
 from rough_rank.inference import build_dense_features, build_model_from_checkpoint as build_rough_model
+from utils import load_checkpoint
 
 # ---------- 路径常量 ----------
 BASE_DIR = Path(__file__).resolve().parent.parent   # 项目根目录
@@ -57,13 +58,6 @@ class MMoEDataset(Dataset):
             "high_rating_label": torch.tensor(s["high_rating_label"], dtype=torch.float),  # 是否高分（rating == 5）
             "rating_label":      torch.tensor(s["rating_label"],      dtype=torch.float),  # 归一化评分（rating / 5）
         }
-
-
-# ---------- 通用工具 ----------
-
-def load_checkpoint(model_path, device):
-    # 加载 .pt checkpoint，weights_only=False 是为了兼容含 feature_info 字典的旧格式
-    return torch.load(model_path, map_location=device, weights_only=False)
 
 
 # ---------- 特征构建 ----------
@@ -204,37 +198,42 @@ def load_base_samples(ratings_path, feature_info, skip_unknown=True, ratings=Non
 
 # ---------- 上游模型打分 ----------
 
-def _score_batch(model, batch_samples, fi, device, extra_features_fn):
-    # 通用批量打分辅助函数，对 batch_samples 中可查到 user/movie 索引的样本调用 model 打分
-    # extra_features_fn：由调用方（RecallScorer/CoarseScorer）提供，负责组装各自模型所需的输入 tensor
-    # 不可打分的位置（user/movie 在上游模型中未见过）保持默认分 0.0
+def _collect_scorable_rows(batch_samples, fi):
+    """从 batch 中找出 user/movie 均在上游模型训练集内的样本，返回行数据和对应下标。
+    不可打分的样本保留位置（用默认分 0.0 填充），避免输出长度与输入不一致。"""
     uid_to_idx = fi["user_id_to_index"]
     mid_to_idx = fi["movie_id_to_index"]
     uf = fi["user_features"]
     mf = fi["movie_features"]
-
     rows, positions = [], []
     for pos, s in enumerate(batch_samples):
         uid, mid = s["raw_user_id"], s["raw_movie_id"]
         if uid in uid_to_idx and mid in mid_to_idx:
             rows.append((uid, mid, uf[uid], mf[mid]))
             positions.append(pos)
+    return rows, positions
 
-    batch_scores = [0.0] * len(batch_samples)
-    if not rows:
-        return batch_scores
 
-    # 用 lambda 简化 tensor 构造，避免每行都写 torch.tensor(..., device=device)
-    t = lambda vals, dtype: torch.tensor(vals, dtype=dtype, device=device)
-    outputs = model(*extra_features_fn(rows, fi, t, device)).cpu().tolist()
-    for pos, score in zip(positions, outputs):
-        batch_scores[pos] = score
-    return batch_scores
+def _score_all_samples(model, fi, device, build_inputs_fn, samples, batch_size):
+    """分批对所有样本打分，不可打分的位置填 0.0。
+    分批是为了避免一次性把所有样本塞入 GPU 导致 OOM。"""
+    scores = []
+    with torch.no_grad():
+        for start in range(0, len(samples), batch_size):
+            chunk = samples[start:start + batch_size]
+            rows, positions = _collect_scorable_rows(chunk, fi)
+            batch_scores = [0.0] * len(chunk)
+            if rows:
+                outputs = model(*build_inputs_fn(rows, fi, device)).cpu().tolist()
+                for pos, score in zip(positions, outputs):
+                    batch_scores[pos] = score
+            scores.extend(batch_scores)
+    return scores
 
 
 class RecallScorer:
-    # 封装召回双塔模型，用于给精排样本附加 recall_score（余弦相似度）
-    # 加载时直接从 checkpoint 中读取 feature_info，与训练时保持一致
+    """封装召回双塔模型，给精排样本附加 recall_score（余弦相似度）。"""
+
     def __init__(self, device):
         cp = load_checkpoint(RECALL_MODEL_PATH, device)
         self.fi = cp["feature_info"]
@@ -242,20 +241,13 @@ class RecallScorer:
         self.device = device
 
     def score_samples(self, samples, batch_size):
-        # 分批推理，避免一次性把所有样本塞入 GPU 导致 OOM
-        fi = self.fi
-        scores = []
-        with torch.no_grad():
-            for start in range(0, len(samples), batch_size):
-                chunk = samples[start:start + batch_size]
-                scores.extend(_score_batch(self.model, chunk, fi, self.device, self._features))
-        return scores
+        return _score_all_samples(self.model, self.fi, self.device, self._build_inputs, samples, batch_size)
 
-    def _features(self, rows, fi, t, device):
-        # 组装双塔模型的输入：用户侧（id/属性/行为统计）+ 电影侧（id/genre 向量）
-        # avg_rating 和 rating_count 做了归一化，使数值范围与 Embedding 输出对齐
+    def _build_inputs(self, rows, fi, device):
+        # avg_rating 和 rating_count 做归一化，使数值范围与 Embedding 输出对齐
         uid_to_idx, mid_to_idx = fi["user_id_to_index"], fi["movie_id_to_index"]
         max_count = fi.get("max_rating_count", 1) or 1  # 防止除以 0
+        t = lambda vals, dtype: torch.tensor(vals, dtype=dtype, device=device)
         return (
             t([uid_to_idx[r[0]] for r in rows], torch.long),
             t([r[2]["gender_index"] for r in rows], torch.long),
@@ -269,8 +261,9 @@ class RecallScorer:
 
 
 class CoarseScorer:
-    # 封装粗排三塔模型，用于给精排样本附加 coarse_score（粗排排序分）
-    # 粗排分作为精排的输入特征之一，帮助模型感知上游排序信号
+    """封装粗排三塔模型，给精排样本附加 coarse_score。
+    粗排分作为精排的输入特征之一，帮助模型感知上游排序信号。"""
+
     def __init__(self, device):
         cp = load_checkpoint(ROUGH_MODEL_PATH, device)
         self.fi = cp["feature_info"]
@@ -278,19 +271,12 @@ class CoarseScorer:
         self.device = device
 
     def score_samples(self, samples, batch_size):
-        # 分批推理，与 RecallScorer 保持相同接口
-        fi = self.fi
-        scores = []
-        with torch.no_grad():
-            for start in range(0, len(samples), batch_size):
-                chunk = samples[start:start + batch_size]
-                scores.extend(_score_batch(self.model, chunk, fi, self.device, self._features))
-        return scores
+        return _score_all_samples(self.model, self.fi, self.device, self._build_inputs, samples, batch_size)
 
-    def _features(self, rows, fi, t, device):
-        # 组装三塔模型的输入：用户侧 + 电影侧 + 统计密集特征（用户/电影平均分、评分次数、recall_score）
+    def _build_inputs(self, rows, fi, device):
         uid_to_idx, mid_to_idx = fi["user_id_to_index"], fi["movie_id_to_index"]
         rs = fi["rating_stats"]
+        t = lambda vals, dtype: torch.tensor(vals, dtype=dtype, device=device)
         return (
             t([uid_to_idx[r[0]] for r in rows], torch.long),
             t([r[2]["gender_index"] for r in rows], torch.long),

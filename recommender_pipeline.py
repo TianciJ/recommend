@@ -4,6 +4,8 @@ import logging
 from pathlib import Path
 from time import perf_counter
 
+from utils import elapsed_ms
+
 logger = logging.getLogger(__name__)
 
 
@@ -15,9 +17,12 @@ MOVIES_PATH = BASE_DIR / "data" / "movies.dat"
 class RecommenderPipeline:
     def __init__(self, user_profile_repository=None, dataset_repository=None):
         # 所有模型只在初始化时加载一次，避免每次请求重复读取权重
-        self.recaller = build_recaller()
-        self.rough_ranker = build_rough_ranker()
-        self.fine_ranker = build_fine_ranker()
+        from recall.two_tower import TwoTowerRecaller
+        from rough_rank.inference import RoughRanker
+        from fine_rank.inference import MMoEFineRanker
+        self.recaller = TwoTowerRecaller()
+        self.rough_ranker = RoughRanker()
+        self.fine_ranker = MMoEFineRanker()
         # 若外部未传入 repository，尝试从环境变量连接 MySQL；无 MySQL 则返回 None
         self.user_profile_repository = user_profile_repository or build_user_profile_repository()
         self.dataset_repository = dataset_repository or build_dataset_repository()
@@ -88,7 +93,9 @@ class RecommenderPipeline:
             return age, occupation
 
         # 只补充调用方没有传的字段
-        return profile.get("age") if age is None else age, profile.get("occupation") if occupation is None else occupation
+        resolved_age = profile.get("age") if age is None else age
+        resolved_occupation = profile.get("occupation") if occupation is None else occupation
+        return resolved_age, resolved_occupation
 
     # ---------- 带耗时记录的推荐入口 ----------
 
@@ -216,10 +223,6 @@ def load_movie_genres(movies_path=MOVIES_PATH, movies=None):
 
 # ---------- 计时工具 ----------
 
-def elapsed_ms(start_time):
-    return (perf_counter() - start_time) * 1000
-
-
 def record_stage_timing(timing, stage_name, start_time, items):
     # 记录某阶段的耗时（ms）和输出候选数
     timing["stages"][stage_name] = {
@@ -253,21 +256,6 @@ def format_recommendation_line(rank, item):
 
 
 # ---------- 各组件构造函数（延迟导入，避免无 torch 环境加载失败）----------
-
-def build_recaller():
-    from recall.two_tower import TwoTowerRecaller
-    return TwoTowerRecaller()
-
-
-def build_rough_ranker():
-    from rough_rank.inference import RoughRanker
-    return RoughRanker()
-
-
-def build_fine_ranker():
-    from fine_rank.inference import MMoEFineRanker
-    return MMoEFineRanker()
-
 
 def build_cold_start_recommender(user_profile_repository=None, dataset_repository=None):
     from cold_start import ColdStartRecommender
