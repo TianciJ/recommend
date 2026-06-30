@@ -111,7 +111,15 @@ def get_status(request: Request):
 
 @app.post("/api/recommend")
 def recommend(body: RecommendRequest, request: Request):
-    """核心推荐接口。user_id 不在训练集时自动走冷启动。"""
+    """核心推荐接口。user_id 不在训练集时自动走冷启动。user_id 不存在则 404。"""
+    # 验证用户存在：有 MySQL 查库，无 MySQL 只允许 MovieLens 原始范围 1-6040
+    if request.app.state.mysql_available:
+        if request.app.state.user_repo.get_user_profile(body.user_id) is None:
+            raise HTTPException(status_code=404, detail=f"用户 {body.user_id} 不存在，请先注册")
+    else:
+        if not (1 <= body.user_id <= 6040):
+            raise HTTPException(status_code=404, detail=f"用户 {body.user_id} 不存在（无 MySQL 模式下仅支持 1-6040）")
+
     pipeline: RecommenderPipeline = request.app.state.pipeline
     try:
         items = pipeline.recommend(

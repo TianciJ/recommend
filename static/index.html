@@ -415,6 +415,7 @@
         body: JSON.stringify(body),
       });
       const data = await res.json();
+      if (res.status === 404) { setStatus('error', `❌ ${data.detail}`); return; }
       if (!res.ok) { setStatus('error', data.detail || '请求失败'); return; }
       if (!data.items || data.items.length === 0) {
         setStatus('error', `用户 ${userId} 暂无推荐结果`);
