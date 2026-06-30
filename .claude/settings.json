@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip3 install *)",
+      "Bash(pkill -f \"python3 server.py\")",
+      "Bash(xargs kill -9)",
+      "Bash(curl -s -X POST http://localhost:8000/api/users -H 'Content-Type: application/json' -d '{\"username\": \"tianci\", \"age\": 25, \"occupation\": 4}')",
+      "Bash(curl -s -X POST http://localhost:8000/api/recommend -H 'Content-Type: application/json' -d '{\"user_id\": 900001, \"top_k\": 3}')",
+      "Bash(curl -s http://localhost:8000/api/users/900001)"
+    ]
+  }
+}

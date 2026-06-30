@@ -6,8 +6,8 @@ from .model import MMoERanker, get_device
 from utils import load_checkpoint
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-# 默认加载 epoch 6 的精排模型（验证集表现最优）
-DEFAULT_MODEL_PATH = BASE_DIR / "models" / "fine_rank" / "mmoe_epoch_6.pt"
+# 默认加载最新训练的精排模型（train_model 每次训练完都会覆盖写 mmoe.pt）
+DEFAULT_MODEL_PATH = BASE_DIR / "models" / "fine_rank" / "mmoe.pt"
 
 
 def build_model_from_checkpoint(checkpoint, device):

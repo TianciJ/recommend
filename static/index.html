@@ -211,6 +211,27 @@
 
     .source-label { font-size: 0.72rem; color: var(--text-dim); margin-top: 4px; font-style: italic; }
 
+    /* ── Star rating ── */
+    .star-row {
+      display: flex;
+      align-items: center;
+      gap: 3px;
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid var(--border);
+    }
+    .star-row .star-label { font-size: 0.72rem; color: var(--text-dim); margin-right: 4px; }
+    .star {
+      font-size: 1.1rem;
+      cursor: pointer;
+      color: var(--border);
+      transition: color .1s, transform .1s;
+      line-height: 1;
+    }
+    .star:hover, .star.active { color: #facc15; }
+    .star:hover { transform: scale(1.2); }
+    .star-done { font-size: 0.72rem; color: var(--success); margin-left: 4px; }
+
     /* spinner */
     .spinner {
       display: inline-block;
@@ -282,6 +303,20 @@
     </div>
   </div>
 
+  <!-- 重训区（MySQL 可用时显示） -->
+  <div id="retrain-row" style="display:none; margin-bottom:20px; display:none;">
+    <div class="card" style="display:flex; align-items:center; gap:16px; flex-wrap:wrap;">
+      <div style="flex:1; min-width:200px;">
+        <div style="font-size:0.85rem; font-weight:600; margin-bottom:4px;">重新训练模型</div>
+        <div style="font-size:0.78rem; color:var(--text-dim);">将用 MySQL 中最新评分重训三个模型，完成后自动热更新，无需重启服务。约需 10-20 分钟。</div>
+      </div>
+      <div style="display:flex; align-items:center; gap:12px;">
+        <span id="retrain-status-text" style="font-size:0.8rem; color:var(--text-dim);"></span>
+        <button class="btn btn-secondary" id="retrain-btn" onclick="doRetrain()">开始训练</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 状态栏 -->
   <div id="status-bar"></div>
 
@@ -328,11 +363,14 @@
     try {
       const res = await fetch('/api/status');
       const data = await res.json();
+      window._mysqlAvailable = data.mysql_available;
       const badge = document.getElementById('mysql-status');
       if (data.mysql_available) {
         badge.textContent = 'MySQL 已连接';
         badge.className = 'mysql-badge on';
         document.getElementById('register-card').style.display = 'block';
+        document.getElementById('retrain-row').style.display = 'block';
+        pollRetrainStatus();
       } else {
         // 无 MySQL 时显示冷启动辅助字段
         document.getElementById('age-group').style.display = 'flex';
@@ -497,6 +535,42 @@
     }
 
     card.appendChild(scores);
+
+    // ── 星级打分（MySQL 可用时显示） ──
+    if (window._mysqlAvailable) {
+      const starRow = document.createElement('div');
+      starRow.className = 'star-row';
+
+      const starLabel = document.createElement('span');
+      starLabel.className = 'star-label';
+      starLabel.textContent = '打分：';
+      starRow.appendChild(starLabel);
+
+      const stars = [];
+      for (let i = 1; i <= 5; i++) {
+        const s = document.createElement('span');
+        s.className = 'star';
+        s.textContent = '★';
+        s.dataset.value = i;
+        // 悬停时高亮 1..i
+        s.addEventListener('mouseenter', () => stars.forEach((st, idx) => st.classList.toggle('active', idx < i)));
+        s.addEventListener('mouseleave', () => {
+          const cur = parseInt(starRow.dataset.rated || '0');
+          stars.forEach((st, idx) => st.classList.toggle('active', idx < cur));
+        });
+        s.addEventListener('click', () => submitRating(item.movie_id, i, starRow, stars));
+        stars.push(s);
+        starRow.appendChild(s);
+      }
+
+      const doneTip = document.createElement('span');
+      doneTip.className = 'star-done';
+      doneTip.style.display = 'none';
+      starRow.appendChild(doneTip);
+
+      card.appendChild(starRow);
+    }
+
     return card;
   }
 
@@ -515,6 +589,90 @@
       bar.style.width = Math.min(Math.max(value / maxVal, 0), 1) * 100 + '%';
       wrap.appendChild(bar);
       container.appendChild(wrap);
+    }
+  }
+
+  // ── 重新训练 ──
+  let _retrainPollTimer = null;
+
+  async function doRetrain() {
+    const btn = document.getElementById('retrain-btn');
+    btn.disabled = true;
+    setRetrainText('<span class="spinner"></span>提交训练请求...');
+    try {
+      const res = await fetch('/api/retrain', { method: 'POST' });
+      const data = await res.json();
+      if (data.status === 'started' || data.status === 'running') {
+        setRetrainText('<span class="spinner"></span>训练中，请耐心等待...');
+        pollRetrainStatus(true);
+      } else {
+        setRetrainText(data.message || '');
+        btn.disabled = false;
+      }
+    } catch {
+      setRetrainText('请求失败');
+      btn.disabled = false;
+    }
+  }
+
+  function pollRetrainStatus(immediate = false) {
+    if (_retrainPollTimer) clearInterval(_retrainPollTimer);
+    const check = async () => {
+      try {
+        const res = await fetch('/api/retrain/status');
+        const data = await res.json();
+        const btn = document.getElementById('retrain-btn');
+        if (data.running) {
+          setRetrainText('<span class="spinner"></span>训练中，请耐心等待...');
+          btn.disabled = true;
+        } else {
+          clearInterval(_retrainPollTimer);
+          btn.disabled = false;
+          if (data.last_result) {
+            const color = data.last_result.success ? 'var(--success)' : 'var(--error)';
+            setRetrainText(`<span style="color:${color}">${data.last_result.message}</span>`);
+          } else {
+            setRetrainText('');
+          }
+        }
+      } catch { clearInterval(_retrainPollTimer); }
+    };
+    if (immediate) check();
+    _retrainPollTimer = setInterval(check, 5000);
+  }
+
+  function setRetrainText(html) {
+    document.getElementById('retrain-status-text').innerHTML = html;
+  }
+
+  // ── 提交打分 ──
+  async function submitRating(movieId, rating, starRow, stars) {
+    const userId = parseInt(document.getElementById('user-id').value);
+    if (!userId || userId < 1) { setStatus('error', '请先输入 User ID 再打分'); return; }
+
+    // 立即反馈：高亮已选星数
+    starRow.dataset.rated = rating;
+    stars.forEach((s, idx) => s.classList.toggle('active', idx < rating));
+    stars.forEach(s => s.style.pointerEvents = 'none');
+
+    try {
+      const res = await fetch('/api/ratings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: userId, movie_id: movieId, rating }),
+      });
+      const doneTip = starRow.querySelector('.star-done');
+      if (res.ok) {
+        doneTip.textContent = '✓ 已记录';
+        doneTip.style.display = 'inline';
+      } else {
+        doneTip.textContent = '✗ 失败';
+        doneTip.style.color = 'var(--error)';
+        doneTip.style.display = 'inline';
+        stars.forEach(s => s.style.pointerEvents = '');
+      }
+    } catch {
+      stars.forEach(s => s.style.pointerEvents = '');
     }
   }
 

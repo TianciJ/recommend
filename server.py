@@ -2,6 +2,8 @@
 # 启动：python server.py
 # 访问：http://localhost:8000
 import logging
+import threading
+import time
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -13,7 +15,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from database.mysql_client import get_mysql_config_from_env
-from recommender_pipeline import RecommenderPipeline, build_user_profile_repository
+from database.dataset_repository import MysqlDatasetRepository
+from recommender_pipeline import RecommenderPipeline, build_user_profile_repository, build_dataset_repository
 
 
 # ---------- 请求/响应模型 ----------
@@ -34,6 +37,12 @@ class CreateUserRequest(BaseModel):
     occupation: int = Field(ge=0, le=20)
 
 
+class RatingRequest(BaseModel):
+    user_id: int
+    movie_id: int
+    rating: int = Field(ge=1, le=5)
+
+
 # ---------- 应用启动/关闭 ----------
 
 @asynccontextmanager
@@ -42,7 +51,9 @@ async def lifespan(app: FastAPI):
     logger.info("正在加载推荐模型，请稍候...")
     app.state.pipeline = RecommenderPipeline()
     app.state.user_repo = build_user_profile_repository()
+    app.state.dataset_repo = build_dataset_repository()
     app.state.mysql_available = app.state.user_repo is not None
+    app.state.retrain_status = {"running": False, "last_result": None}
     logger.info("模型加载完成。MySQL 可用: %s", app.state.mysql_available)
     yield
 
@@ -157,6 +168,75 @@ def get_user(user_id: int, request: Request):
     if profile is None:
         raise HTTPException(status_code=404, detail=f"用户 {user_id} 不存在")
     return profile
+
+
+@app.post("/api/ratings", status_code=201)
+def add_rating(body: RatingRequest, request: Request):
+    """提交用户对电影的评分（1-5 星）。需要配置 MySQL。"""
+    require_mysql(request)
+    repo: MysqlDatasetRepository = request.app.state.dataset_repo
+    try:
+        repo.add_rating(
+            user_id=body.user_id,
+            movie_id=body.movie_id,
+            rating=body.rating,
+            timestamp=int(time.time()),
+            split="train",
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return {"user_id": body.user_id, "movie_id": body.movie_id, "rating": body.rating}
+
+
+@app.post("/api/retrain")
+def retrain(request: Request):
+    """在后台重新训练所有模型，训练完后热替换 pipeline，不需要重启服务。"""
+    require_mysql(request)
+    status = request.app.state.retrain_status
+    if status["running"]:
+        return {"status": "running", "message": "训练正在进行中，请稍候"}
+
+    def run_training():
+        status["running"] = True
+        status["last_result"] = None
+        try:
+            logger.info("开始重新训练模型...")
+            _retrain_all_models()
+            # 训练完成，热替换 pipeline（原子赋值，正在处理的请求不受影响）
+            request.app.state.pipeline = RecommenderPipeline()
+            status["last_result"] = {"success": True, "message": "训练完成，模型已热更新"}
+            logger.info("模型热更新完成")
+        except Exception as e:
+            status["last_result"] = {"success": False, "message": str(e)}
+            logger.error("训练失败: %s", e)
+        finally:
+            status["running"] = False
+
+    threading.Thread(target=run_training, daemon=True).start()
+    return {"status": "started", "message": "训练已在后台启动，可轮询 /api/retrain/status 查看进度"}
+
+
+@app.get("/api/retrain/status")
+def retrain_status(request: Request):
+    """查询训练进度。"""
+    status = request.app.state.retrain_status
+    return {
+        "running": status["running"],
+        "last_result": status["last_result"],
+    }
+
+
+def _retrain_all_models():
+    """依次重训召回、粗排、精排三个模型（epochs 都取 3）。"""
+    from recall.two_tower import train_model as train_recall
+    from rough_rank.train import train_model as train_rough
+    from fine_rank.train import train_model as train_fine
+    logger.info("训练召回模型...")
+    train_recall(epochs=3)
+    logger.info("训练粗排模型...")
+    train_rough(epochs=3)
+    logger.info("训练精排模型...")
+    train_fine(epochs=3)
 
 
 # ---------- 启动 ----------

@@ -77,6 +77,19 @@ class MysqlDatasetRepository:
             )
         )
 
+    def add_rating(self, user_id, movie_id, rating, timestamp, split="train"):
+        # 写入单条用户评分；已有则更新分数
+        self._execute(
+            lambda cursor: cursor.execute(
+                """
+                INSERT INTO ratings (user_id, movie_id, rating, rating_timestamp, split_name)
+                VALUES (%s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE rating = VALUES(rating)
+                """,
+                (int(user_id), int(movie_id), int(rating), int(timestamp), split),
+            )
+        )
+
     def upsert_ratings(self, ratings, split="train"):
         # 批量写入评分数据；遇到相同主键时更新 rating 分数
         params = [to_upsert_rating_params(rating, split) for rating in ratings]
