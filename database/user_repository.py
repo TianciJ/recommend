@@ -34,6 +34,14 @@ class UserProfileRepository:
         occupation = validate_occupation(occupation)
         return self._execute(lambda cursor: insert_user(cursor, username, age, occupation))
 
+    def get_user_by_username(self, username):
+        # 按用户名查询，返回 {user_id, username} 或 None
+        row = self._fetchone(
+            "SELECT user_id, username FROM users WHERE username = %s",
+            (str(username),),
+        )
+        return {"user_id": int(row["user_id"]), "username": row["username"]} if row else None
+
     def get_user_profile(self, user_id):
         # 按 user_id 查询，返回 {user_id, age, occupation} 或 None
         row = self._fetchone(

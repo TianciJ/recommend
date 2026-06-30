@@ -300,6 +300,14 @@
         </div>
         <div id="reg-result" style="font-size:0.78rem; color:var(--text-dim); width:100%;"></div>
       </div>
+      <div style="border-top:1px solid var(--border); margin-top:14px; padding-top:14px;">
+        <div style="font-size:0.78rem; color:var(--text-dim); margin-bottom:8px;">已有账号？按用户名查 ID</div>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <input id="lookup-username" type="text" placeholder="输入用户名" style="width:140px;">
+          <button class="btn btn-secondary" onclick="doLookup()" style="padding:8px 14px;">查询</button>
+          <span id="lookup-result" style="font-size:0.8rem; color:var(--text-dim);"></span>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -589,6 +597,32 @@
       bar.style.width = Math.min(Math.max(value / maxVal, 0), 1) * 100 + '%';
       wrap.appendChild(bar);
       container.appendChild(wrap);
+    }
+  }
+
+  // ── 按用户名查 user_id ──
+  async function doLookup() {
+    const username = document.getElementById('lookup-username').value.trim();
+    const resultEl = document.getElementById('lookup-result');
+    if (!username) { resultEl.style.color = 'var(--error)'; resultEl.textContent = '请输入用户名'; return; }
+
+    resultEl.style.color = 'var(--text-dim)';
+    resultEl.textContent = '查询中...';
+    try {
+      const res = await fetch(`/api/users/by-username/${encodeURIComponent(username)}`);
+      const data = await res.json();
+      if (res.ok) {
+        resultEl.style.color = 'var(--success)';
+        resultEl.textContent = `user_id = ${data.user_id}`;
+        // 顺便填入推荐查询框
+        document.getElementById('user-id').value = data.user_id;
+      } else {
+        resultEl.style.color = 'var(--error)';
+        resultEl.textContent = data.detail || '未找到';
+      }
+    } catch {
+      resultEl.style.color = 'var(--error)';
+      resultEl.textContent = '请求失败';
     }
   }
 

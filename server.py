@@ -160,6 +160,16 @@ def create_user(body: CreateUserRequest, request: Request):
     return {"user_id": user_id, "username": body.username}
 
 
+@app.get("/api/users/by-username/{username}")
+def get_user_by_username(username: str, request: Request):
+    """按用户名查询 user_id。需要配置 MySQL。"""
+    require_mysql(request)
+    result = request.app.state.user_repo.get_user_by_username(username)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"用户名 '{username}' 不存在")
+    return result
+
+
 @app.get("/api/users/{user_id}")
 def get_user(user_id: int, request: Request):
     """查询用户画像。需要配置 MySQL。"""
